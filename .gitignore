@@ -1,0 +1,37 @@
+# Environment — never commit real secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Database & data artifacts
+*.db
+*.sqlite3
+data/email_backup/
+data/test_report.html
+
+# Logs
+logs/
+
+# Word temp files
+~$*.docx
+*.docx
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

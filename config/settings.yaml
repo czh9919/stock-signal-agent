@@ -1,0 +1,43 @@
+# Stock Agent Configuration
+# All sensitive keys are loaded from environment variables
+
+api:
+  anthropic_api_key: ${ANTHROPIC_API_KEY}
+  alpha_vantage_key: ${ALPHA_VANTAGE_KEY}
+  news_api_key: ${NEWS_API_KEY}
+  sendgrid_api_key: ${SENDGRID_API_KEY}
+
+email:
+  recipient: ${RECIPIENT_EMAIL}
+  sender: "stock-agent@example.com"
+  sender_name: "Stock AI Agent"
+  subject_prefix: "[Stock Agent]"
+  use_smtp: true
+  smtp_host: ${SMTP_HOST}
+  smtp_port: ${SMTP_PORT}
+  smtp_user: ${SMTP_USER}
+  smtp_password: ${SMTP_PASS}
+
+scheduler:
+  daily_run_time: "06:00"
+  timezone: "America/New_York"
+
+limits:
+  max_stocks_per_day: 20
+  max_claude_calls_per_day: 50
+  news_per_stock: 10
+  history_days: 730
+  backtest_history_days: 730
+
+database:
+  path: "data/stock_agent.db"
+
+logging:
+  level: "INFO"
+  file: "logs/agent.log"
+
+claude:
+  model: "claude-sonnet-4-6"
+  max_tokens: 1024
+  confidence_warning_threshold: 0.5
+  consecutive_buy_warning: 3
