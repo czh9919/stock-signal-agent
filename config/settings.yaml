@@ -41,3 +41,4 @@ claude:
   max_tokens: 1024
   confidence_warning_threshold: 0.5
   consecutive_buy_warning: 3
+  alert_confidence_threshold: 0.75   # morning/premarket: only email if confidence >= this

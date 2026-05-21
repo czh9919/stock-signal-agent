@@ -2,8 +2,16 @@ name: Daily Stock Analysis
 
 on:
   schedule:
-    - cron: '0 11 * * 1-5'  # 06:00 EST / 07:00 EDT  Mon–Fri
-  workflow_dispatch:          # Manual trigger from GitHub UI
+    # All times UTC. ET = UTC-5 (EST winter) / UTC-4 (EDT summer). Dublin = UTC+0 winter / UTC+1 summer.
+    - cron: '0 9 * * 1-5'   # 09:00 UTC = Dublin 09:00 GMT (morning log + alert)
+    - cron: '0 14 * * 1-5'  # 14:00 UTC = 09:00 ET  (pre-market alert)
+    - cron: '30 21 * * 1-5' # 21:30 UTC = 16:30 ET  (after-close full report)
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: 'Run mode: morning | premarket | full'
+        required: false
+        default: 'full'
 
 jobs:
   run-agent:
@@ -28,10 +36,27 @@ jobs:
 
       - name: Install optional dependencies
         run: pip install vectorbt duckdb
-        continue-on-error: true   # agent runs fine without these
+        continue-on-error: true
+
+      - name: Resolve run mode from schedule time
+        id: mode
+        run: |
+          HOUR=$(date -u +%H)
+          MINUTE=$(date -u +%M)
+          INPUT_MODE="${{ github.event.inputs.run_mode }}"
+          if [ -n "$INPUT_MODE" ]; then
+            echo "run_mode=$INPUT_MODE" >> $GITHUB_OUTPUT
+          elif [ "$HOUR" = "09" ]; then
+            echo "run_mode=morning" >> $GITHUB_OUTPUT
+          elif [ "$HOUR" = "14" ]; then
+            echo "run_mode=premarket" >> $GITHUB_OUTPUT
+          else
+            echo "run_mode=full" >> $GITHUB_OUTPUT
+          fi
 
       - name: Run stock agent
         env:
+          RUN_MODE: ${{ steps.mode.outputs.run_mode }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}

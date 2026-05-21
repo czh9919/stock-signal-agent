@@ -5,6 +5,7 @@ Run: python main.py
 import logging
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 # Load .env if present
@@ -56,10 +57,12 @@ def load_watchlist(path: str = "config/watchlist.csv") -> list[dict]:
 
 def run_daily_pipeline(config: dict):
     logger = logging.getLogger("main")
-    logger.info("=== Stock AI Agent — daily run starting ===")
+    run_mode = os.environ.get("RUN_MODE", "full")   # full | morning | premarket
+    logger.info(f"=== Stock AI Agent — run_mode={run_mode} ===")
 
-    limits    = config.get("limits", {})
-    claude_cfg = config.get("claude", {})
+    limits       = config.get("limits", {})
+    claude_cfg   = config.get("claude", {})
+    alert_thresh = float(claude_cfg.get("alert_confidence_threshold", 0.75))
     db_path   = config.get("database", {}).get("path", "data/stock_agent.db")
 
     storage   = Storage(db_path)
@@ -179,14 +182,35 @@ def run_daily_pipeline(config: dict):
     accuracy = storage.get_accuracy_report()
 
     # ── Render & send email ───────────────────────────────────────────────
-    renderer = ReportRenderer()
-    html = renderer.render(stock_results, accuracy_report=accuracy)
+    email_cfg  = config.get("email", {})
+    prefix_en  = email_cfg.get("subject_prefix", "[Stock Agent]")
+    prefix_zh  = "[股票助手]"
+    renderer   = ReportRenderer()
+    mailer     = Mailer(email_cfg)
 
-    email_cfg = config.get("email", {})
-    mailer = Mailer(email_cfg)
-    mailer.send(html)
+    if run_mode == "full":
+        html_en, html_zh = renderer.render_both(stock_results, accuracy_report=accuracy)
+        mailer.send(html_en, subject=f"{prefix_en} Daily Report {date.today()}")
+        mailer.send(html_zh, subject=f"{prefix_zh} 每日报告 {date.today()}")
+        html = html_en
+    else:
+        # morning / premarket — alert only for high-confidence picks
+        _REC_ZH = {"BUY": "买入", "SELL": "卖出", "HOLD": "持有"}
+        alerts = [r for r in stock_results if (r.get("confidence") or 0) >= alert_thresh]
+        if alerts:
+            mode_en = "Morning" if run_mode == "morning" else "Pre-Market"
+            mode_zh = "早盘" if run_mode == "morning" else "盘前"
+            tickers_en = ", ".join(r["ticker"] + " " + r.get("recommendation", "") for r in alerts)
+            tickers_zh = ", ".join(r["ticker"] + " " + _REC_ZH.get(r.get("recommendation", ""), r.get("recommendation", "")) for r in alerts)
+            html_en, html_zh = renderer.render_alert_both(alerts, run_mode)
+            mailer.send(html_en, subject=f"{prefix_en} {mode_en} Alert — {tickers_en}")
+            mailer.send(html_zh, subject=f"{prefix_zh} {mode_zh}预警 — {tickers_zh}")
+            logger.info(f"{run_mode}: sent bilingual alert for {len(alerts)} stock(s)")
+        else:
+            logger.info(f"{run_mode}: no signals above {alert_thresh:.0%} confidence — skipping email")
+        html = ""
 
-    logger.info("=== Daily run complete ===")
+        logger.info("=== Daily run complete ===")
     return html
 
 

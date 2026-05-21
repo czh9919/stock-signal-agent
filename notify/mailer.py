@@ -15,9 +15,10 @@ class Mailer:
     def __init__(self, config: dict):
         self.config = config
 
-    def send(self, html_body: str) -> bool:
-        """Send daily report. Writes local backup on failure. Returns True on success."""
-        subject = f"{self.config.get('subject_prefix', '[Stock Agent]')} Daily Report {date.today()}"
+    def send(self, html_body: str, subject: str | None = None) -> bool:
+        """Send report or alert email. Writes local backup on failure. Returns True on success."""
+        if subject is None:
+            subject = f"{self.config.get('subject_prefix', '[Stock Agent]')} Daily Report {date.today()}"
         recipient = self.config.get("recipient") or os.environ.get("RECIPIENT_EMAIL")
 
         if not recipient:
