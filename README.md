@@ -67,6 +67,33 @@ AAPL,1.0,Apple Inc
 MSFT,1.0,Microsoft Corp
 ```
 
+## GitHub Actions (automated daily run)
+
+The repo includes two workflows:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `daily_run.yml` | 06:00 EST Mon–Fri + manual | Runs `main.py` and sends email report |
+| `ci.yml` | Push / PR to main | Syntax-checks all Python files |
+
+**Setup — add secrets to your repo:**
+
+Go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+
+| Secret | Value |
+|---|---|
+| `ANTHROPIC_API_KEY` | Your Anthropic API key |
+| `NEWS_API_KEY` | newsapi.org key |
+| `SENDGRID_API_KEY` | SendGrid API key |
+| `RECIPIENT_EMAIL` | Email address to receive reports |
+| `ALPHA_VANTAGE_KEY` | Alpha Vantage key (optional) |
+| `SMTP_HOST` | e.g. `smtp.gmail.com` (if using SMTP) |
+| `SMTP_PORT` | e.g. `587` |
+| `SMTP_USER` | Your Gmail address |
+| `SMTP_PASS` | Gmail app password |
+
+To trigger a run manually: **Actions → Daily Stock Analysis → Run workflow**.
+
 ## Risk Controls (hardcoded)
 
 - Max 20 stocks/day, max 50 Claude API calls/day

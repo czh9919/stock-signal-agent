@@ -1,0 +1,44 @@
+name: Daily Stock Analysis
+
+on:
+  schedule:
+    - cron: '0 11 * * 1-5'  # 06:00 EST / 07:00 EDT  Mon–Fri
+  workflow_dispatch:          # Manual trigger from GitHub UI
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install core dependencies
+        run: |
+          pip install --upgrade pip
+          pip install yfinance ta anthropic APScheduler Jinja2 sendgrid \
+            newsapi-python pandas numpy requests python-dotenv PyYAML
+
+      - name: Install optional dependencies
+        run: pip install vectorbt duckdb
+        continue-on-error: true   # agent runs fine without these
+
+      - name: Run stock agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+        run: python main.py
