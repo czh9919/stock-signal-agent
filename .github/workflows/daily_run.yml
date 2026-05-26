@@ -37,6 +37,27 @@ jobs:
         run: pip install vectorbt duckdb
         continue-on-error: true
 
+      # ── Persistent storage patch ──────────────────────────────────────────
+      # GitHub Actions runners are ephemeral — no disk survives between runs.
+      # We use actions/cache to persist:
+      #   cache/              alert dedup, portfolio snapshots, FF5/SP500 caches
+      #   data/stock_agent.db AI recommendation history + 30-day accuracy tracker
+      #
+      # Key strategy: unique key per run-id so every run writes a fresh entry;
+      # restore-keys prefix matches the most recent prior run automatically.
+      - name: Ensure persistent dirs exist
+        run: mkdir -p cache data
+
+      - name: Restore persistent cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache/
+            data/stock_agent.db
+          key: persist-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            persist-${{ runner.os }}-
+
       - name: Resolve run mode from schedule time
         id: mode
         run: |
