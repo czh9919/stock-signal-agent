@@ -52,23 +52,26 @@ def build_report(metrics: dict, stress: dict, holdings: list[dict],
                  div_candidates: Optional[list] = None,
                  fx_rates: Optional[dict] = None,
                  stock_factors: Optional[list] = None,
-                 port_exposure: Optional[dict] = None) -> tuple[str, str]:
+                 port_exposure: Optional[dict] = None,
+                 attribution: Optional[dict] = None) -> tuple[str, str]:
     """Returns (html_en, html_zh)."""
     en = _build(metrics, stress, holdings, price_data, last_week, "en",
                 frontier, suggestions, has_chart=has_chart_en,
                 div_candidates=div_candidates, fx_rates=fx_rates,
-                stock_factors=stock_factors, port_exposure=port_exposure)
+                stock_factors=stock_factors, port_exposure=port_exposure,
+                attribution=attribution)
     zh = _build(metrics, stress, holdings, price_data, last_week, "zh",
                 frontier, suggestions, has_chart=has_chart_zh,
                 div_candidates=div_candidates, fx_rates=fx_rates,
-                stock_factors=stock_factors, port_exposure=port_exposure)
+                stock_factors=stock_factors, port_exposure=port_exposure,
+                attribution=attribution)
     return en, zh
 
 
 def _build(metrics, stress, holdings, price_data, last_week, lang,
            frontier=None, suggestions=None, has_chart=False,
            div_candidates=None, fx_rates=None,
-           stock_factors=None, port_exposure=None):
+           stock_factors=None, port_exposure=None, attribution=None):
     t        = _T[lang]
     rag      = metrics.get("overall_rag", "GREY")
     rag_col  = _RAG_COLOR[rag]
@@ -291,6 +294,82 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
   </table>
 </div>""")
 
+    # ── Performance attribution ───────────────────────────────────────────────
+    if attribution and attribution.get("contributions"):
+        atr   = attribution
+        alpha = atr["alpha"]
+        total = atr["total_return"]
+        alpha_col = "#27ae60" if alpha >= 0 else "#c0392b"
+        total_col = "#27ae60" if total >= 0 else "#c0392b"
+
+        _FLABELS = {
+            "Mkt-RF": ("Market (β·MKT)",   "市场 (β·MKT)"),
+            "SMB":    ("Size (β·SMB)",      "规模 (β·SMB)"),
+            "HML":    ("Value (β·HML)",     "价值 (β·HML)"),
+            "RMW":    ("Profit (β·RMW)",    "盈利 (β·RMW)"),
+            "CMA":    ("Invest (β·CMA)",    "投资 (β·CMA)"),
+        }
+        attr_rows = (
+            f"<tr style='background:#f8f9ff'>"
+            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>"
+            f"{'Risk-free (RF)' if lang=='en' else '无风险利率 (RF)'}</td>"
+            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>—</td>"
+            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>"
+            f"{_pct(atr['rf'])}</td>"
+            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>"
+            f"{_pct(atr['rf'])}</td>"
+            f"</tr>"
+        )
+        for fname, info in atr["contributions"].items():
+            lbl  = _FLABELS.get(fname, (fname, fname))
+            lbl  = lbl[1] if lang == "zh" else lbl[0]
+            beta = info["beta"]
+            fr   = info["factor_ret"]
+            con  = info["contrib"]
+            c_col = "#27ae60" if con >= 0 else "#c0392b"
+            attr_rows += (
+                f"<tr>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{lbl}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{_f(beta)}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{_pct(fr)}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:{c_col};font-weight:600'>{_pct(con)}</td>"
+                f"</tr>"
+            )
+        attr_rows += (
+            f"<tr style='border-top:2px solid #e0e0e0'>"
+            f"<td colspan='3' style='padding:5px 8px;font-size:12px;color:#555'>"
+            f"{'Factor total' if lang=='en' else '因子合计'}</td>"
+            f"<td style='padding:5px 8px;font-size:12px;font-weight:600'>{_pct(atr['factor_total'])}</td>"
+            f"</tr>"
+            f"<tr style='background:#fff8e1'>"
+            f"<td colspan='3' style='padding:5px 8px;font-size:12px;font-weight:600'>"
+            f"{'Alpha (stock picking)' if lang=='en' else 'Alpha（选股贡献）'}</td>"
+            f"<td style='padding:5px 8px;font-size:13px;font-weight:700;color:{alpha_col}'>{_pct(alpha)}</td>"
+            f"</tr>"
+            f"<tr style='background:#f0f4ff'>"
+            f"<td colspan='3' style='padding:6px 8px;font-size:12px;font-weight:700'>"
+            f"{'Portfolio total' if lang=='en' else '组合总收益'}</td>"
+            f"<td style='padding:6px 8px;font-size:13px;font-weight:700;color:{total_col}'>{_pct(total)}</td>"
+            f"</tr>"
+        )
+        sections.append(f"""
+<div style="padding:0 20px 16px">
+  <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
+    {t['attribution'].format(n=atr['window'])}
+  </h2>
+  <p style="font-size:11px;color:#aaa;margin:0 0 8px">
+    {t['attribution_note'].format(n=atr['window'], start=atr['start'], end=atr['end'])}
+  </p>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#f8f9ff">
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['attr_factor']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['attr_factor_ret']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['attr_contrib']}</th>
+    </tr>{attr_rows}
+  </table>
+</div>""")
+
     # ── Stock factor rankings ──────────────────────────────────────────────────
     if stock_factors:
         _SIG_COL = {"BUY": "#27ae60", "SELL": "#c0392b", "HOLD": "#95a5a6"}
@@ -356,11 +435,14 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
             dir_col   = "#27ae60" if s["delta"] > 0 else "#c0392b"
             cgt_tag   = (f" <span style='color:#e67e22;font-size:10px'>{t['cgt_flag']}</span>"
                          if s.get("cgt_flag") else "")
+            reason = s.get("reason_zh" if lang == "zh" else "reason", "")
+            reason_html = (f"<br><span style='color:#aaa;font-size:10px'>{reason}</span>"
+                           if reason else "")
             sug_rows += (
                 f"<tr style='background:{'#fff8f8' if tier == 1 else '#fff'}'>"
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0'>{badge}</td>"
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:13px'>"
-                f"<b>{s['ticker']}</b>{cgt_tag}</td>"
+                f"<b>{s['ticker']}</b>{cgt_tag}{reason_html}</td>"
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>"
                 f"{_pct(s['cur_weight'])}</td>"
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>"
@@ -748,6 +830,11 @@ _T = {
         "dc_skip":        "Low benefit",
         "port_exposure":       "Portfolio Factor Exposures (FF5)",
         "port_exposure_note":  "Market-value-weighted average of Fama-French 5-factor betas across equity holdings.",
+        "attribution":         "Performance Attribution (FF5 — last {n} days)",
+        "attribution_note":    "{start} → {end} · {n} trading days · equity holdings only · betas from 252-day OLS",
+        "attr_factor":         "Factor",
+        "attr_factor_ret":     "Factor return",
+        "attr_contrib":        "Contribution",
         "factor_rankings":     "Stock Factor Rankings (FF5 — sorted by IR)",
         "factor_rankings_note":"Sorted by Information Ratio (α / σ_residuals × √252). Signal = BUY if t(α) > 1.5, SELL if < −1.5.",
         "price":               "Price",
@@ -829,6 +916,11 @@ _T = {
         "dc_skip":        "效益有限",
         "port_exposure":       "组合因子暴露（FF5）",
         "port_exposure_note":  "按市值加权的Fama-French五因子Beta，反映当前股票持仓的整体风格偏向。",
+        "attribution":         "业绩归因（FF5 — 近{n}个交易日）",
+        "attribution_note":    "{start} → {end} · {n}个交易日 · 仅股票持仓 · Beta来自252日OLS回归",
+        "attr_factor":         "因子",
+        "attr_factor_ret":     "因子收益",
+        "attr_contrib":        "贡献度",
         "factor_rankings":     "个股因子排名（FF5 — 按IR排序）",
         "factor_rankings_note":"按信息比率（α / σ残差 × √252）降序排列。信号：t(α) > 1.5 = 买入，< −1.5 = 卖出。",
         "price":               "价格",

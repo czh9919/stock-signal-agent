@@ -95,15 +95,20 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
 
     # ── Fama-French 5-factor analysis ─────────────────────────────────────────
     from risk.optimizer        import fetch_ff5
-    from strategy.factor_model import run_factor_regression, portfolio_factor_exposure
+    from strategy.factor_model import (run_factor_regression, portfolio_factor_exposure,
+                                       compute_attribution, enrich_suggestions)
 
-    ff5          = fetch_ff5()
+    ff5           = fetch_ff5()
     stock_factors: list[dict] = []
     port_exposure             = None
+    attribution               = None
 
     if ff5 is not None:
         # Portfolio factor exposure (weighted average betas of current holdings)
         port_exposure = portfolio_factor_exposure(holdings, price_data, ff5)
+        # Performance attribution over last 21 trading days
+        if port_exposure:
+            attribution = compute_attribution(holdings, price_data, ff5, port_exposure)
 
         if run_mode == "full":
             # Watchlist factor ranking — load prices for tickers not in holdings
@@ -151,6 +156,8 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
     rf          = thresholds.get("risk_free_rate", 0.035)
     frontier    = compute_frontier(price_data, holdings, rf=rf)
     suggestions = rebalancing_suggestions(holdings, frontier, nav_eur=metrics["nav_eur"])
+    if stock_factors and suggestions:
+        enrich_suggestions(suggestions, stock_factors)
     chart_en    = risk_return_png(frontier, "en")
     chart_zh    = risk_return_png(frontier, "zh")
 
@@ -219,6 +226,7 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
         div_candidates=div_candidates, fx_rates=fx_rates,
         stock_factors=stock_factors if stock_factors else None,
         port_exposure=port_exposure,
+        attribution=attribution,
     )
     mailer.send_report(html_en, html_zh, rag=metrics["overall_rag"],
                        chart_en=chart_en, chart_zh=chart_zh)
