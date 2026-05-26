@@ -7,7 +7,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_FONT_ZH = "Microsoft YaHei"
+# Ordered by preference; first match wins on the current OS
+_FONT_ZH_CANDIDATES = [
+    "Microsoft YaHei",      # Windows
+    "PingFang SC",          # macOS
+    "Noto Sans CJK SC",     # Linux: fonts-noto-cjk
+    "Noto Sans SC",         # Linux: alternate registration name
+    "WenQuanYi Micro Hei",  # Linux: fonts-wqy-microhei (small, reliable)
+    "WenQuanYi Zen Hei",    # Linux: fonts-wqy-zenhei
+    "Source Han Sans SC",   # Adobe
+    "SimHei",               # Windows fallback
+]
+
+
+def _find_zh_font(fm) -> str | None:
+    available = {f.name for f in fm.fontManager.ttflist}
+    for name in _FONT_ZH_CANDIDATES:
+        if name in available:
+            logger.debug(f"CJK font selected: {name}")
+            return name
+    logger.warning("No CJK font found — Chinese labels may render as boxes")
+    return None
 
 
 def risk_return_png(frontier: dict, lang: str = "en") -> bytes:
@@ -33,9 +53,8 @@ def risk_return_png(frontier: dict, lang: str = "en") -> bytes:
 def _render(frontier: dict, lang: str, plt, fm) -> bytes:
     is_zh = (lang == "zh")
 
-    # Use Microsoft YaHei for Chinese; fall back to default if unavailable
-    available = {f.name for f in fm.fontManager.ttflist}
-    rc = {"font.family": _FONT_ZH} if (is_zh and _FONT_ZH in available) else {}
+    zh_font = _find_zh_font(fm)
+    rc = {"font.family": zh_font} if (is_zh and zh_font) else {}
 
     L = {
         "title":   "风险–收益图" if is_zh else "Risk–Return Chart",

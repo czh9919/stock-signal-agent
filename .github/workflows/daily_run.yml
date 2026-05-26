@@ -37,6 +37,11 @@ jobs:
         run: pip install vectorbt duckdb
         continue-on-error: true
 
+      - name: Install CJK fonts (fixes Chinese labels in matplotlib charts)
+        run: |
+          sudo apt-get install -y fonts-wqy-microhei
+          python -c "import matplotlib; import shutil; shutil.rmtree(matplotlib.get_cachedir(), ignore_errors=True)"
+
       # ── Persistent storage patch ──────────────────────────────────────────
       # GitHub Actions runners are ephemeral — no disk survives between runs.
       # We use actions/cache to persist:
