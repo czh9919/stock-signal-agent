@@ -274,6 +274,43 @@ def run_portfolio_pipeline(run_mode: str = "full"):
     logger.info("=== Portfolio pipeline complete ===")
 
 
+# ── Backtest pipeline ──────────────────────────────────────────────────────────
+
+def run_backtest_pipeline(config: dict):
+    logger = logging.getLogger("backtest")
+    logger.info("=== Walk-Forward Backtest — starting ===")
+
+    vol_cfg    = load_yaml("config/volatility.yaml")
+    thresholds = load_yaml("config/thresholds.yaml")
+    rf         = thresholds.get("risk_free_rate", 0.035)
+
+    watchlist     = load_watchlist()
+    equity_tickers = [w["ticker"] for w in watchlist if w.get("asset_class", "equity") == "equity"]
+
+    from data.spy_universe       import load_universe
+    from backtest.walk_forward   import run_walk_forward, print_summary
+
+    max_sp500 = int(config.get("backtest", {}).get("max_sp500", 100))
+    days      = int(config.get("backtest", {}).get("history_days", 1260))
+
+    price_data = load_universe(equity_tickers, days=days, max_sp500=max_sp500)
+
+    results = run_walk_forward(
+        price_data,
+        rf=rf,
+        train_days=int(config.get("backtest", {}).get("train_days", 756)),
+        test_days=int(config.get("backtest", {}).get("test_days", 63)),
+    )
+
+    if results:
+        print_summary(results["summary"])
+    else:
+        logger.warning("Walk-forward returned no results")
+
+    logger.info("=== Walk-Forward Backtest complete ===")
+    return results
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -288,3 +325,6 @@ if __name__ == "__main__":
 
     if mode in ("portfolio", "full", "alert_check"):
         run_portfolio_pipeline(run_mode=mode)
+
+    if mode == "backtest":
+        run_backtest_pipeline(cfg)

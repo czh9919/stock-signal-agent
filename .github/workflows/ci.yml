@@ -30,8 +30,9 @@ jobs:
             main.py scheduler.py alert.py \
             data/fetcher.py data/cleaner.py data/storage.py \
             data/fetch_holdings.py data/price_loader.py data/cache.py \
+            data/spy_universe.py \
             strategy/indicators.py strategy/signals.py strategy/ai_analyst.py \
-            backtest/historical.py backtest/tracker.py \
+            backtest/historical.py backtest/tracker.py backtest/walk_forward.py \
             risk/risk_engine.py risk/stress.py risk/optimizer.py \
             notify/renderer.py notify/mailer.py notify/report_gen.py notify/chart.py
           echo "All files pass syntax check"
