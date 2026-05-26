@@ -53,6 +53,13 @@ For 21-day horizon tail risk the Monte Carlo DCC-GARCH + Hawkes simulation provi
 │    │ Outputs per stock:                             │    │
 │    │   α (ann.), t(α), IR, R², β_MKT/SMB/HML/      │    │
 │    │   RMW/CMA, signal (t>1.5→BUY / t<−1.5→SELL)  │    │
+│    │ Robust signal: PSR + deflated IR + multi-      │    │
+│    │   window consistency + OOS hit rate            │    │
+│    │ Collinearity: VIF, condition number, corr      │    │
+│    │ IC analysis: cross-sectional Spearman IC,      │    │
+│    │   IC-IR, p-value (8 rolling eval periods)      │    │
+│    │ Signal weights: PSR×IR×consistency → capped    │    │
+│    │   20% model portfolio + factor exposure check  │    │
 │    │ Portfolio aggregate: market-value-weighted β  │    │
 │    │ Performance attribution: last 21 trading days │    │
 │    │   RF + Σβ·factor + residual α                 │    │
@@ -127,7 +134,10 @@ Set via the `RUN_MODE` environment variable:
 |---|---|
 | `indicators.py` | SMA 20/50/200, EMA 12/26, MACD + signal, RSI (14), Bollinger Bands (20, 2σ), ATR (14), 10-day volume SMA |
 | `signals.py` | Rule-based scoring — assigns bullish/bearish/neutral labels; returns composite score |
-| `factor_model.py` | **FF5 regression engine**: `run_factor_regression` — OLS of excess returns on 5 Fama-French factors; 252-day window, min 63 days; outputs α, t(α), IR, R², 5 betas, BUY/SELL/HOLD signal. `portfolio_factor_exposure` — market-value-weighted aggregate betas. `compute_attribution` — decomposes last 21-day portfolio return into factor contributions + residual α. `enrich_suggestions` — attaches α-based "why" reason to each rebalancing suggestion. |
+| `factor_model.py` | **FF5 regression engine**: `run_factor_regression` — OLS of excess returns on 5 Fama-French factors; 252-day window, min 63 days; outputs α, t(α), IR, R², 5 betas, BUY/SELL/HOLD signal. `portfolio_factor_exposure` — market-value-weighted aggregate betas. `compute_attribution` — decomposes last 21-day portfolio return into factor contributions + residual α. `enrich_suggestions` — attaches α-based "why" reason to each rebalancing suggestion. `compute_robust_signal` — multi-window PSR + deflated IR + OOS hit rate for statistically robust BUY/SELL signals. |
+| `factor_ortho.py` | **Factor collinearity diagnostics**: `check_factor_collinearity` — pairwise correlations, VIF per factor, condition number of the FF5 correlation matrix, and high-correlation pair flagging (|r|>0.4). Warns when VIF>5, condition number>10, or any high-corr pair is found. |
+| `ic_analysis.py` | **Cross-sectional IC analysis**: `compute_universe_ic` — rolling Spearman rank-IC between predicted alpha ranks (estimated over a 126-day training window) and realised forward returns, aggregated over 8 evaluation periods. Reports IC mean, IC-IR (annualised), t-stat, and p-value. `compute_alpha_decay` — hit rate of the alpha signal direction across 5/21/63/126-day horizons for a single ticker. |
+| `weight_allocator.py` | **Risk-constrained weight allocation**: `compute_signal_weights` — converts robust BUY signals (PSR≥65%, IR_deflated>0) into portfolio weights using score = PSR × deflated IR × consistency boost; caps each position at 20%; iteratively redistributes excess to uncapped positions; flags portfolio-level FF5 factor exposures exceeding 1.5×. |
 
 ### `backtest/`
 
@@ -207,6 +217,63 @@ R_portfolio = RF + β_MKT·(Mkt-RF) + β_SMB·SMB + β_HML·HML + β_RMW·RMW + 
 
 Large positive α: stock selection added value beyond what the factor tilts explain.  
 Large negative α: you're being compensated only for beta exposure, not for selection.
+
+### Robust Signal (PSR + Deflated IR + OOS)
+
+`compute_robust_signal()` applies three additional filters on top of the naive t(α) signal to reduce false discoveries:
+
+| Filter | What it measures | Threshold |
+|---|---|---|
+| **PSR** (Probabilistic Sharpe Ratio) | P(true IR > 0) corrected for non-normality (skewness, kurtosis) | PSR > 85% → BUY |
+| **Deflated IR** | IR adjusted for multiple-testing across M strategies (Bailey–Lopez de Prado 2014) | IR_deflated > 0 |
+| **Multi-window consistency** | α positive across 63/126/252-day windows simultaneously | ≥ 2/3 windows positive |
+| **OOS hit rate** | Rolling 126-day train / 21-day test — fraction of periods where sign(α) = sign(realized excess return) | > 55% |
+
+A BUY `robust_signal` requires all four filters to pass. The naive t(α) signal is shown in brackets in the report if it differs.
+
+### Factor Collinearity Diagnostics
+
+`check_factor_collinearity()` runs every cycle in `RUN_MODE=full` to detect problematic linear dependencies among the FF5 factors (typically HML↔CMA and Mkt-RF↔RMW):
+
+| Diagnostic | Warning threshold |
+|---|---|
+| VIF per factor | > 5 concerning, > 10 severe |
+| Correlation matrix condition number | > 10 |
+| Pairwise |r| > 0.4 pairs | Any detected |
+
+Collinearity does not invalidate betas but inflates their standard errors — signals should be weighted less heavily when VIFs are elevated.
+
+### Cross-Sectional IC Analysis
+
+`compute_universe_ic()` measures whether the alpha signal has genuine cross-sectional predictive power, not just in-sample fit:
+
+1. At each of 8 evaluation points, estimate alpha for every watchlist stock using the prior 126 trading days of data
+2. Rank stocks by estimated alpha
+3. Observe actual 21-day forward excess returns and rank those
+4. IC = Spearman rank correlation between predicted and realised ranks
+
+| Output | Interpretation |
+|---|---|
+| `ic_mean` | Average signal quality; IC > 0.05 is meaningful for daily equity data |
+| `ic_ir` | IC divided by IC volatility, annualised — analogous to Sharpe of the signal |
+| `pvalue` | Two-tailed p-value (normal approximation); < 0.05 → statistically significant |
+
+IC < 0 (signal predicts wrong direction) or p > 0.10 (noise) are warnings that the FF5 alpha ranking should be used with caution.
+
+### Signal-Weighted Allocation
+
+`compute_signal_weights()` translates robust BUY signals into a model portfolio:
+
+```
+Score = PSR × IR_deflated × (1 + 0.2 × alpha_consistency / n_windows)
+Weight = Score / ΣScores   (before capping)
+```
+
+- Each position capped at **20%**; excess redistributed to uncapped positions iteratively
+- Portfolio-level FF5 factor exposures are computed as Σ(weight × beta_factor)
+- Exposures exceeding **1.5×** trigger a warning in the report
+
+The signal portfolio is shown in the email report with per-position PSR, IR, and consistency, plus the portfolio-level factor exposure summary.
 
 ### Decision Trace
 
@@ -316,7 +383,9 @@ Current candidates in `config/watchlist.csv`: TLT, IEF, AGG (Treasuries), GLD.
 - Stress test table: EUR loss + % drawdown for COVID / rate shock / GFC
 - **Portfolio Factor Exposures** — aggregate β_MKT, β_SMB, β_HML, β_RMW, β_CMA and α for current holdings
 - **Performance Attribution** — last 21-day return decomposed into factor contributions + residual α (stock-picking contribution highlighted)
-- **Stock Factor Rankings** — watchlist equities sorted by IR with α, t(α), β_MKT, R², and BUY/SELL/HOLD signal
+- **Factor Model Quality** — cross-sectional IC mean/IC-IR/p-value (signal validation) + FF5 collinearity diagnostics (VIF, condition number, high-corr pairs)
+- **Stock Factor Rankings** — watchlist equities sorted by IR with α, t(α), β_MKT, R², robust_signal, PSR, OOS hit rate, and 63-day attribution driver
+- **Signal-Weighted Allocation** — model portfolio from robust BUY signals with score-proportional weights, portfolio FF5 factor exposures, and exposure warnings
 - Embedded efficient frontier chart (MC cloud + current + max-Sharpe)
 - Rebalancing suggestions with **decision trace** (α-based "why" under each ticker)
 - Diversification candidates (bonds + gold, sorted by ΔSharpe, with FX rates)

@@ -42,6 +42,26 @@ def _delta(now, prev):
     return f' <span style="color:{color};font-size:11px">{sign}{abs(d)*100:.1f}pp</span>'
 
 
+def _sig_stars(t_val) -> str:
+    if t_val is None or t_val != t_val:
+        return "—"
+    a = abs(t_val)
+    if a >= 3.0: return "★★★"
+    if a >= 2.0: return "★★"
+    if a >= 1.5: return "★"
+    return "—"
+
+
+def _t_color(t_val) -> str:
+    if t_val is None or t_val != t_val:
+        return "#bbb"
+    a = abs(t_val)
+    if a >= 3.0: return "#27ae60"
+    if a >= 2.0: return "#2980b9"
+    if a >= 1.5: return "#e67e22"
+    return "#bbb"
+
+
 def build_report(metrics: dict, stress: dict, holdings: list[dict],
                  price_data: dict, last_week: Optional[dict] = None,
                  lang: str = "both",
@@ -53,25 +73,31 @@ def build_report(metrics: dict, stress: dict, holdings: list[dict],
                  fx_rates: Optional[dict] = None,
                  stock_factors: Optional[list] = None,
                  port_exposure: Optional[dict] = None,
-                 attribution: Optional[dict] = None) -> tuple[str, str]:
+                 attribution: Optional[dict] = None,
+                 collinearity: Optional[dict] = None,
+                 ic_result: Optional[dict] = None,
+                 signal_weights: Optional[list] = None) -> tuple[str, str]:
     """Returns (html_en, html_zh)."""
     en = _build(metrics, stress, holdings, price_data, last_week, "en",
                 frontier, suggestions, has_chart=has_chart_en,
                 div_candidates=div_candidates, fx_rates=fx_rates,
                 stock_factors=stock_factors, port_exposure=port_exposure,
-                attribution=attribution)
+                attribution=attribution, collinearity=collinearity,
+                ic_result=ic_result, signal_weights=signal_weights)
     zh = _build(metrics, stress, holdings, price_data, last_week, "zh",
                 frontier, suggestions, has_chart=has_chart_zh,
                 div_candidates=div_candidates, fx_rates=fx_rates,
                 stock_factors=stock_factors, port_exposure=port_exposure,
-                attribution=attribution)
+                attribution=attribution, collinearity=collinearity,
+                ic_result=ic_result, signal_weights=signal_weights)
     return en, zh
 
 
 def _build(metrics, stress, holdings, price_data, last_week, lang,
            frontier=None, suggestions=None, has_chart=False,
            div_candidates=None, fx_rates=None,
-           stock_factors=None, port_exposure=None, attribution=None):
+           stock_factors=None, port_exposure=None, attribution=None,
+           collinearity=None, ic_result=None, signal_weights=None):
     t        = _T[lang]
     rag      = metrics.get("overall_rag", "GREY")
     rag_col  = _RAG_COLOR[rag]
@@ -268,6 +294,47 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
     # ── Portfolio factor exposure ──────────────────────────────────────────────
     if port_exposure:
         pe = port_exposure
+        _PE_META = [
+            ("beta_mkt", "se_mkt", "t_mkt", "Market",       "市场"),
+            ("beta_smb", "se_smb", "t_smb", "Size (SMB)",   "规模(SMB)"),
+            ("beta_hml", "se_hml", "t_hml", "Value (HML)",  "价值(HML)"),
+            ("beta_rmw", "se_rmw", "t_rmw", "Profit (RMW)", "盈利(RMW)"),
+            ("beta_cma", "se_cma", "t_cma", "Invest (CMA)", "投资(CMA)"),
+        ]
+        alpha_val = pe.get("alpha_ann", 0.0) or 0.0
+        a_col     = "#27ae60" if alpha_val >= 0 else "#c0392b"
+        pe_rows   = (
+            f"<tr>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>"
+            f"{'α (ann.)' if lang == 'en' else 'α（年化）'}</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+            f"font-weight:700;color:{a_col}'>{_pct(alpha_val)}</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#bbb'>—</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#bbb'>—</td>"
+            f"</tr>"
+        )
+        for bkey, sekey, tkey, en_lbl, zh_lbl in _PE_META:
+            lbl  = zh_lbl if lang == "zh" else en_lbl
+            bval = pe.get(bkey)
+            sval = pe.get(sekey)
+            tval = pe.get(tkey)
+            se_str   = f"±{sval:.3f}" if (sval is not None and sval == sval) else ""
+            tval_str = _f(tval, 1) if (tval is not None and tval == tval) else "—"
+            stars    = _sig_stars(tval)
+            tc       = _t_color(tval)
+            se_html  = (f"<br><span style='font-size:10px;color:#bbb'>{se_str}</span>"
+                        if se_str else "")
+            pe_rows += (
+                f"<tr>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{lbl}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>"
+                f"{_f(bval)}{se_html}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{tc};font-weight:600'>{tval_str}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{tc}'>{stars}</td>"
+                f"</tr>"
+            )
         sections.append(f"""
 <div style="padding:0 20px 16px">
   <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
@@ -276,82 +343,141 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
   <p style="font-size:11px;color:#aaa;margin:0 0 8px">{t['port_exposure_note']}</p>
   <table style="width:100%;border-collapse:collapse">
     <tr style="background:#f8f9ff">
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">α (ann.)</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β MKT</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β SMB</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β HML</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β RMW</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β CMA</th>
-    </tr>
-    <tr>
-      <td style="padding:6px 8px;font-size:13px;font-weight:600;color:{'#27ae60' if pe.get('alpha_ann',0)>=0 else '#c0392b'}">{_pct(pe.get('alpha_ann'))}</td>
-      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_mkt'))}</td>
-      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_smb'))}</td>
-      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_hml'))}</td>
-      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_rmw'))}</td>
-      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_cma'))}</td>
-    </tr>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:40%">{t['pe_factor']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:24%">β (±SE)</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:20%">{t['pe_t']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:16%">{t['pe_sig']}</th>
+    </tr>{pe_rows}
   </table>
+  <p style="font-size:10px;color:#ccc;margin:6px 0 0">{t['pe_se_note']}</p>
 </div>""")
 
     # ── Performance attribution ───────────────────────────────────────────────
     if attribution and attribution.get("contributions"):
-        atr   = attribution
-        alpha = atr["alpha"]
-        total = atr["total_return"]
-        alpha_col = "#27ae60" if alpha >= 0 else "#c0392b"
-        total_col = "#27ae60" if total >= 0 else "#c0392b"
+        atr         = attribution
+        alpha_gross = atr.get("alpha_gross", atr.get("alpha", 0.0))
+        alpha_net   = atr.get("alpha_net", alpha_gross)
+        cost        = atr.get("trading_cost_pct", 0.0) or 0.0
+        total       = atr["total_return"]
+        factor_tot  = atr["factor_total"]
+        attr_error  = atr.get("attribution_error")
+        p_ols       = atr.get("portfolio_ols")
 
-        _FLABELS = {
-            "Mkt-RF": ("Market (β·MKT)",   "市场 (β·MKT)"),
-            "SMB":    ("Size (β·SMB)",      "规模 (β·SMB)"),
-            "HML":    ("Value (β·HML)",     "价值 (β·HML)"),
-            "RMW":    ("Profit (β·RMW)",    "盈利 (β·RMW)"),
-            "CMA":    ("Invest (β·CMA)",    "投资 (β·CMA)"),
+        ag_col    = "#27ae60" if alpha_gross >= 0 else "#c0392b"
+        an_col    = "#27ae60" if alpha_net   >= 0 else "#c0392b"
+        total_col = "#27ae60" if total       >= 0 else "#c0392b"
+
+        _AFL = {
+            "Mkt-RF": ("Market",  "市场"),
+            "SMB":    ("Size",    "规模"),
+            "HML":    ("Value",   "价值"),
+            "RMW":    ("Profit",  "盈利"),
+            "CMA":    ("Invest",  "投资"),
         }
+        # RF row
+        rf_val    = atr.get("rf", 0.0)
         attr_rows = (
             f"<tr style='background:#f8f9ff'>"
-            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>"
-            f"{'Risk-free (RF)' if lang=='en' else '无风险利率 (RF)'}</td>"
-            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>—</td>"
-            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>"
-            f"{_pct(atr['rf'])}</td>"
-            f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>"
-            f"{_pct(atr['rf'])}</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#888'>"
+            f"{'Risk-free (RF)' if lang == 'en' else '无风险利率 (RF)'}</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#bbb'>—</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#888'>"
+            f"{_pct(rf_val)}</td>"
             f"</tr>"
         )
+        # Factor rows — 3 columns: Factor+factor_ret sub | β+t/sig sub | contrib+pct sub
         for fname, info in atr["contributions"].items():
-            lbl  = _FLABELS.get(fname, (fname, fname))
-            lbl  = lbl[1] if lang == "zh" else lbl[0]
-            beta = info["beta"]
-            fr   = info["factor_ret"]
-            con  = info["contrib"]
-            c_col = "#27ae60" if con >= 0 else "#c0392b"
+            lbl_pair = _AFL.get(fname, (fname, fname))
+            lbl      = lbl_pair[1] if lang == "zh" else lbl_pair[0]
+            beta     = info["beta"]
+            fr       = info["factor_ret"]
+            con      = info["contrib"]
+            tval     = info.get("beta_t")
+            c_se     = info.get("contrib_se")
+            pct_tot  = info.get("pct_of_total")
+
+            fr_col  = "#27ae60" if (fr or 0) >= 0 else "#c0392b"
+            fr_sub  = f"<br><span style='font-size:10px;color:{fr_col}'>{_pct(fr, 2)}</span>"
+
+            stars   = _sig_stars(tval)
+            tc      = _t_color(tval)
+            tv_sub  = ""
+            if tval is not None and tval == tval:
+                tv_sub = (f"<br><span style='font-size:10px;color:{tc}'>"
+                          f"t={_f(tval, 1)} {stars}</span>")
+
+            c_col   = "#27ae60" if (con or 0) >= 0 else "#c0392b"
+            pct_sub = ""
+            if pct_tot is not None and pct_tot == pct_tot:
+                pct_sub = f"<br><span style='font-size:10px;color:#bbb'>({_pct(pct_tot, 1)})</span>"
+            se_sub  = ""
+            if c_se is not None and c_se == c_se and c_se > 1e-10:
+                se_sub = f"<span style='font-size:10px;color:#ddd'> ±{_pct(c_se, 2)}</span>"
+
             attr_rows += (
                 f"<tr>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{lbl}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{_f(beta)}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{_pct(fr)}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:{c_col};font-weight:600'>{_pct(con)}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>"
+                f"<b>{lbl}</b>{fr_sub}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>"
+                f"{_f(beta)}{tv_sub}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{c_col};font-weight:600'>{_pct(con)}{pct_sub}{se_sub}</td>"
+                f"</tr>"
+            )
+
+        # Factor total
+        ft_pct = atr.get("factor_total_pct")
+        ft_sub = ""
+        if ft_pct is not None and ft_pct == ft_pct:
+            ft_sub = f" <span style='font-size:10px;color:#bbb'>({_pct(ft_pct, 1)})</span>"
+        attr_rows += (
+            f"<tr style='border-top:2px solid #e0e0e0;background:#f8f8f8'>"
+            f"<td colspan='2' style='padding:6px 8px;font-size:12px;font-weight:600;color:#555'>"
+            f"{'Factor total' if lang == 'en' else '因子合计'}</td>"
+            f"<td style='padding:6px 8px;font-size:12px;font-weight:600'>"
+            f"{_pct(factor_tot)}{ft_sub}</td>"
+            f"</tr>"
+            f"<tr style='background:#fff8e1'>"
+            f"<td colspan='2' style='padding:6px 8px;font-size:12px;font-weight:600'>"
+            f"{t['attr_alpha_gross']}</td>"
+            f"<td style='padding:6px 8px;font-size:13px;font-weight:700;color:{ag_col}'>"
+            f"{_pct(alpha_gross)}</td>"
+            f"</tr>"
+        )
+        if cost != 0.0:
+            an_pct = atr.get("alpha_net_pct")
+            an_sub = ""
+            if an_pct is not None and an_pct == an_pct:
+                an_sub = f" <span style='font-size:10px;color:#bbb'>({_pct(an_pct, 1)})</span>"
+            attr_rows += (
+                f"<tr>"
+                f"<td colspan='2' style='padding:5px 8px;font-size:12px;color:#888'>"
+                f"{t['attr_trading_cost']}</td>"
+                f"<td style='padding:5px 8px;font-size:12px;color:#c0392b'>−{_pct(abs(cost))}</td>"
+                f"</tr>"
+                f"<tr style='background:#f0fdf4'>"
+                f"<td colspan='2' style='padding:6px 8px;font-size:12px;font-weight:700'>"
+                f"{t['attr_alpha_net']}</td>"
+                f"<td style='padding:6px 8px;font-size:13px;font-weight:700;color:{an_col}'>"
+                f"{_pct(alpha_net)}{an_sub}</td>"
                 f"</tr>"
             )
         attr_rows += (
-            f"<tr style='border-top:2px solid #e0e0e0'>"
-            f"<td colspan='3' style='padding:5px 8px;font-size:12px;color:#555'>"
-            f"{'Factor total' if lang=='en' else '因子合计'}</td>"
-            f"<td style='padding:5px 8px;font-size:12px;font-weight:600'>{_pct(atr['factor_total'])}</td>"
-            f"</tr>"
-            f"<tr style='background:#fff8e1'>"
-            f"<td colspan='3' style='padding:5px 8px;font-size:12px;font-weight:600'>"
-            f"{'Alpha (stock picking)' if lang=='en' else 'Alpha（选股贡献）'}</td>"
-            f"<td style='padding:5px 8px;font-size:13px;font-weight:700;color:{alpha_col}'>{_pct(alpha)}</td>"
-            f"</tr>"
             f"<tr style='background:#f0f4ff'>"
-            f"<td colspan='3' style='padding:6px 8px;font-size:12px;font-weight:700'>"
-            f"{'Portfolio total' if lang=='en' else '组合总收益'}</td>"
-            f"<td style='padding:6px 8px;font-size:13px;font-weight:700;color:{total_col}'>{_pct(total)}</td>"
+            f"<td colspan='2' style='padding:6px 8px;font-size:12px;font-weight:700'>"
+            f"{'Portfolio total' if lang == 'en' else '组合总收益'}</td>"
+            f"<td style='padding:6px 8px;font-size:13px;font-weight:700;color:{total_col}'>"
+            f"{_pct(total)}</td>"
             f"</tr>"
         )
+        err_note = ""
+        if attr_error is not None and attr_error == attr_error:
+            err_note = (f"\n  <p style='font-size:10px;color:#bbb;margin:6px 0 0'>"
+                        f"{t['attr_error'].format(e=_pct(attr_error, 2))}</p>")
+        ols_note = ""
+        if p_ols:
+            ols_note = (f"\n  <p style='font-size:10px;color:#bbb;margin:2px 0 0'>"
+                        f"{t['attr_ols_note'].format(n=p_ols['n_days'])}</p>")
         sections.append(f"""
 <div style="padding:0 20px 16px">
   <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
@@ -362,11 +488,125 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
   </p>
   <table style="width:100%;border-collapse:collapse">
     <tr style="background:#f8f9ff">
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['attr_factor']}</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['attr_factor_ret']}</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['attr_contrib']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:38%">{t['attr_factor']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:28%">β</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:34%">{t['attr_contrib']}</th>
     </tr>{attr_rows}
+  </table>{err_note}{ols_note}
+  <p style="font-size:10px;color:#ccc;margin:4px 0 0">{t['attr_sig_note']}</p>
+</div>""")
+
+    # ── Factor model quality (IC + collinearity) ─────────────────────────────
+    if ic_result or (collinearity and collinearity.get("n_obs", 0) > 0):
+        qrows = ""
+
+        # IC analysis row
+        if ic_result:
+            ic_m   = ic_result.get("ic_mean")
+            icir_v = ic_result.get("icir")
+            pval   = ic_result.get("pvalue")
+            nobs   = ic_result.get("n_obs", 0)
+            fwd    = ic_result.get("forward_days", 21)
+
+            ic_col = "#27ae60" if (ic_m or 0) > 0.05 else ("#e67e22" if (ic_m or 0) > 0 else "#c0392b")
+            pval_str = _f(pval, 3) if (pval is not None and pval == pval) else "N/A"
+            pval_col = "#27ae60" if (pval or 1.0) < 0.05 else ("#e67e22" if (pval or 1.0) < 0.10 else "#bbb")
+            icir_str = _f(icir_v, 2) if (icir_v is not None and icir_v == icir_v) else "N/A"
+            ic_label    = t["fmq_ic_label"].format(fwd=fwd)
+            icir_label  = t["fmq_icir_label"]
+            pval_label  = t["fmq_pval_label"]
+            nobs_label  = t["fmq_nobs_label"]
+
+            qrows += (
+                f"<tr style='background:#f0fdf4'>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;font-weight:600'>"
+                f"{ic_label}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{ic_col};font-weight:700'>{_f(ic_m, 3) if ic_m is not None and ic_m == ic_m else 'N/A'}</td>"
+                f"</tr>"
+                f"<tr>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{icir_label}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;font-weight:600'>{icir_str}</td>"
+                f"</tr>"
+                f"<tr>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{pval_label}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{pval_col};font-weight:600'>{pval_str}</td>"
+                f"</tr>"
+                f"<tr>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#888'>{nobs_label}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#888'>{nobs}</td>"
+                f"</tr>"
+            )
+
+        # Collinearity section
+        if collinearity and collinearity.get("n_obs", 0) > 0:
+            cond_num   = collinearity.get("condition_number")
+            vif_dict   = collinearity.get("vif", {})
+            high_pairs = collinearity.get("high_pairs", [])
+            has_warn   = collinearity.get("has_warning", False)
+
+            warn_badge = ""
+            if has_warn:
+                warn_badge = (f"<span style='background:#e67e22;color:#fff;padding:1px 7px;"
+                              f"border-radius:8px;font-size:10px;margin-left:6px'>"
+                              f"{t['fmq_warn']}</span>")
+            cond_col = "#c0392b" if (cond_num or 0) > 30 else ("#e67e22" if (cond_num or 0) > 10 else "#27ae60")
+            cond_str = _f(cond_num, 1) if (cond_num is not None and cond_num != float("inf")) else "∞"
+
+            qrows += (
+                f"<tr style='background:#f8f9ff'>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;font-weight:600'>"
+                f"{t['fmq_cond']}{warn_badge}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{cond_col};font-weight:700'>{cond_str}</td>"
+                f"</tr>"
+            )
+
+            # VIF table
+            if vif_dict:
+                vif_cells = ""
+                for fname, vval in vif_dict.items():
+                    vc = "#c0392b" if vval > 10 else ("#e67e22" if vval > 5 else "#27ae60")
+                    vif_str = _f(vval, 1) if vval != float("inf") else "∞"
+                    vif_cells += (
+                        f"<span style='margin-right:10px;white-space:nowrap'>"
+                        f"<span style='color:#888'>{fname}:</span> "
+                        f"<b style='color:{vc}'>{vif_str}</b></span>"
+                    )
+                qrows += (
+                    f"<tr>"
+                    f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{t['fmq_vif']}</td>"
+                    f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:11px'>{vif_cells}</td>"
+                    f"</tr>"
+                )
+
+            # High-correlation pairs
+            if high_pairs:
+                pair_strs = []
+                for fa, fb, cv in high_pairs:
+                    pc = "#c0392b" if abs(cv) > 0.7 else "#e67e22"
+                    pair_strs.append(
+                        f"<span style='color:{pc};margin-right:8px'>{fa}↔{fb}: {cv:+.2f}</span>"
+                    )
+                qrows += (
+                    f"<tr>"
+                    f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{t['fmq_high_pairs']}</td>"
+                    f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:11px'>{''.join(pair_strs)}</td>"
+                    f"</tr>"
+                )
+
+        sections.append(f"""
+<div style="padding:0 20px 16px">
+  <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
+    {t['fmq_title']}
+  </h2>
+  <p style="font-size:11px;color:#aaa;margin:0 0 8px">{t['fmq_note']}</p>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#f8f9ff">
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:50%">{t['metric']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666;width:50%">{t['value']}</th>
+    </tr>{qrows}
   </table>
 </div>""")
 
@@ -376,27 +616,83 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
         _SIG_ZH  = {"BUY": "买入", "SELL": "卖出", "HOLD": "持有"}
         sf_rows  = ""
         for s in stock_factors:
-            sig     = s.get("signal", "HOLD")
-            sig_col = _SIG_COL.get(sig, "#888")
-            sig_lbl = _SIG_ZH.get(sig, sig) if lang == "zh" else sig
-            price   = f"${s['price']:.2f}" if s.get("price") else "—"
-            alpha   = _pct(s.get("alpha_ann"))
-            t_stat  = _f(s.get("t_alpha"))
-            ir      = _f(s.get("ir"), decimals=2)
-            r2      = _f(s.get("r_squared"), decimals=2)
-            bmkt    = _f(s.get("beta_mkt"))
+            # Prefer robust_signal; fall back to naive signal
+            robust_sig = s.get("robust_signal")
+            naive_sig  = s.get("signal", "HOLD")
+            sig        = robust_sig if robust_sig else naive_sig
+            sig_col    = _SIG_COL.get(sig, "#888")
+            sig_lbl    = _SIG_ZH.get(sig, sig) if lang == "zh" else sig
+            # Mark if robust signal differs from naive
+            if robust_sig and robust_sig != naive_sig:
+                naive_lbl = (_SIG_ZH.get(naive_sig, naive_sig) if lang == "zh" else naive_sig)
+                sig_lbl  += f"<br><span style='font-size:10px;color:#bbb'>({naive_lbl})</span>"
+
+            price  = f"${s['price']:.2f}" if s.get("price") else "—"
+            alpha  = _pct(s.get("alpha_ann"))
+            t_stat = _f(s.get("t_alpha"))
+            # Use deflated IR when available, raw IR as fallback
+            ir_val = s.get("ir_deflated", s.get("ir"))
+            ir_str = (_f(ir_val, decimals=2) + ("*" if "ir_deflated" in s else "")
+                      if ir_val is not None and ir_val == ir_val else "N/A")
+            r2     = _f(s.get("r_squared"), decimals=2)
+            bmkt   = _f(s.get("beta_mkt"))
+
+            # Build robustness sub-text for sub-row
+            robust_parts = []
+            psr = s.get("psr")
+            if psr is not None and psr == psr:
+                psr_col = "#27ae60" if psr > 0.75 else ("#e67e22" if psr > 0.5 else "#c0392b")
+                robust_parts.append(
+                    f"<span style='color:{psr_col}'>PSR={psr*100:.0f}%</span>"
+                )
+            cons = s.get("alpha_consistency")
+            nw   = s.get("n_windows", len((63, 126, 252)))
+            if cons is not None:
+                cons_col = "#27ae60" if cons >= nw - 1 else ("#e67e22" if cons >= 1 else "#c0392b")
+                w_label  = "w一致" if lang == "zh" else "w consist."
+                robust_parts.append(
+                    f"<span style='color:{cons_col}'>{cons}/{nw}{w_label}</span>"
+                )
+            oos = s.get("oos_hit_rate")
+            if oos is not None:
+                oos_col = "#27ae60" if oos > 0.55 else ("#e67e22" if oos > 0.50 else "#c0392b")
+                oos_lbl = "OOS命中" if lang == "zh" else "OOS hit"
+                robust_parts.append(
+                    f"<span style='color:{oos_col}'>{oos_lbl}={oos*100:.0f}%</span>"
+                )
+
+            # Build driver + robustness combined sub-row
+            driver   = s.get("driver_zh" if lang == "zh" else "driver_en", "")
+            sub_lines = []
+            if driver and driver != "—":
+                sub_lines.append(f"↳ {driver}")
+            if robust_parts:
+                sep = " &nbsp;·&nbsp; "
+                sub_lines.append(sep.join(robust_parts))
+            driver_row = ""
+            if sub_lines:
+                driver_row = (
+                    f"<tr>"
+                    f"<td colspan='8' style='padding:2px 8px 8px 20px;font-size:11px;"
+                    f"background:#fafafa;border-bottom:1px solid #f0f0f0'>"
+                    + "<br>".join(sub_lines)
+                    + "</td></tr>"
+                )
+
+            bd = "0" if driver_row else "1px solid #f0f0f0"
             sf_rows += (
                 f"<tr>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'><b>{s['ticker']}</b></td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{price}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px'><b>{s['ticker']}</b></td>"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px;color:#555'>{price}</td>"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px;"
                 f"font-weight:700;color:{sig_col}'>{sig_lbl}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{alpha}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{bmkt}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{t_stat}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;font-weight:600'>{ir}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#888'>{r2}</td>"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px;color:#555'>{alpha}</td>"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px;color:#555'>{bmkt}</td>"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px;color:#555'>{t_stat}</td>"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px;font-weight:600'>{ir_str}</td>"
+                f"<td style='padding:5px 8px;border-bottom:{bd};font-size:12px;color:#888'>{r2}</td>"
                 f"</tr>"
+                + driver_row
             )
         sections.append(f"""
 <div style="padding:0 20px 16px">
@@ -412,10 +708,79 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
       <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">α (ann.)</th>
       <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β MKT</th>
       <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">t(α)</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">IR</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['ir_col']}</th>
       <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">R²</th>
     </tr>{sf_rows}
   </table>
+  <p style="font-size:10px;color:#ccc;margin:6px 0 0">{t['ir_deflated_note']}</p>
+</div>""")
+
+    # ── Signal weight allocation ──────────────────────────────────────────────
+    if signal_weights:
+        sw_rows = ""
+        for e in signal_weights:
+            w_pct   = f"{e['weight']*100:.1f}%"
+            psr_v   = e.get("psr")
+            psr_str = f"{psr_v*100:.0f}%" if (psr_v is not None and psr_v == psr_v) else "N/A"
+            psr_col = "#27ae60" if (psr_v or 0) > 0.75 else ("#e67e22" if (psr_v or 0) > 0.5 else "#c0392b")
+            ir_d    = e.get("ir_deflated")
+            ir_str  = _f(ir_d, 2) if (ir_d is not None and ir_d == ir_d) else "N/A"
+            cons    = e.get("alpha_consistency")
+            cons_str = str(cons) if cons is not None else "—"
+            sw_rows += (
+                f"<tr>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'><b>{e['ticker']}</b></td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"font-weight:700;color:#2980b9'>{w_pct}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{psr_col}'>{psr_str}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{ir_str}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#888'>{cons_str}</td>"
+                f"</tr>"
+            )
+
+        # Portfolio-level factor exposure warnings
+        exp_warn_html = ""
+        if signal_weights:
+            port_exp  = signal_weights[0].get("port_factor_exposures", {})
+            exp_warns = signal_weights[0].get("exposure_warnings", {})
+            if port_exp:
+                exp_cells = ""
+                for fname, fval in port_exp.items():
+                    fc = "#c0392b" if fname in exp_warns else "#555"
+                    exp_cells += (
+                        f"<span style='margin-right:10px;white-space:nowrap'>"
+                        f"<span style='color:#888'>{fname}:</span> "
+                        f"<b style='color:{fc}'>{_f(fval, 2)}</b></span>"
+                    )
+                warn_note = ""
+                if exp_warns:
+                    warn_names = ", ".join(exp_warns.keys())
+                    warn_note = (
+                        f"<p style='font-size:11px;color:#c0392b;margin:4px 0 0'>"
+                        f"{t['sw_exp_warn'].format(factors=warn_names)}</p>"
+                    )
+                exp_warn_html = (
+                    f"<p style='font-size:11px;color:#888;margin:6px 0 2px'>{t['sw_port_exp']}: "
+                    f"{exp_cells}</p>{warn_note}"
+                )
+
+        sections.append(f"""
+<div style="padding:0 20px 16px">
+  <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
+    {t['sw_title']}
+  </h2>
+  <p style="font-size:11px;color:#aaa;margin:0 0 8px">{t['sw_note']}</p>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#f8f9ff">
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['ticker']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['sw_weight']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">PSR</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['ir_col']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['sw_consist']}</th>
+    </tr>{sw_rows}
+  </table>
+  {exp_warn_html}
 </div>""")
 
     # ── Rebalancing suggestions ────────────────────────────────────────────────
@@ -830,15 +1195,43 @@ _T = {
         "dc_skip":        "Low benefit",
         "port_exposure":       "Portfolio Factor Exposures (FF5)",
         "port_exposure_note":  "Market-value-weighted average of Fama-French 5-factor betas across equity holdings.",
+        "pe_factor":           "Factor",
+        "pe_t":                "t-stat",
+        "pe_sig":              "Sig.",
+        "pe_se_note":          "±SE: pooled from holdings (independence assumed — lower bound).",
         "attribution":         "Performance Attribution (FF5 — last {n} days)",
         "attribution_note":    "{start} → {end} · {n} trading days · equity holdings only · betas from 252-day OLS",
         "attr_factor":         "Factor",
         "attr_factor_ret":     "Factor return",
         "attr_contrib":        "Contribution",
-        "factor_rankings":     "Stock Factor Rankings (FF5 — sorted by IR)",
-        "factor_rankings_note":"Sorted by Information Ratio (α / σ_residuals × √252). Signal = BUY if t(α) > 1.5, SELL if < −1.5.",
+        "attr_alpha_gross":    "Alpha (gross, stock selection)",
+        "attr_trading_cost":   "Trading cost",
+        "attr_alpha_net":      "Alpha (net of cost)",
+        "attr_error":          "Attribution error: ±{e}",
+        "attr_ols_note":       "t-stats via direct portfolio OLS ({n} days)",
+        "attr_sig_note":       "★★★ |t|≥3.0 highly significant · ★★ |t|≥2.0 significant · ★ |t|≥1.5 marginal",
+        "factor_rankings":      "Stock Factor Rankings (FF5 — sorted by IR)",
+        "factor_rankings_note": "Signal uses robust filter: PSR>85% + multi-window consistency + deflated IR. Naive t(α) signal shown in brackets if it differs. Sub-row: 63-day attribution · PSR · window consistency · OOS hit rate.",
+        "ir_col":               "IR*",
+        "ir_deflated_note":     "IR* = deflated for multiple-testing (Bailey–Lopez de Prado 2014). PSR = P(true α>0) corrected for non-normality. OOS = rolling 126d-train/21d-test hit rate.",
         "price":               "Price",
         "signal":              "Signal",
+        "fmq_title":           "Factor Model Quality",
+        "fmq_note":            "IC = cross-sectional Spearman rank correlation between predicted and realised alpha ranks. VIF > 5 indicates collinearity concerns.",
+        "fmq_ic_label":        "IC mean ({fwd}-day forward)",
+        "fmq_icir_label":      "IC-IR (annualised)",
+        "fmq_pval_label":      "p-value (two-tailed)",
+        "fmq_nobs_label":      "# evaluation periods",
+        "fmq_cond":            "Condition number (FF5 corr)",
+        "fmq_vif":             "VIF per factor",
+        "fmq_high_pairs":      "High-corr pairs (|r|>0.4)",
+        "fmq_warn":            "Warning",
+        "sw_title":            "Signal-Weighted Allocation (BUY signals)",
+        "sw_note":             "Score = PSR × deflated IR × consistency boost. Weights capped at 20% and renormalised. Eligible: robust_signal=BUY, PSR≥65%, IR_deflated>0.",
+        "sw_weight":           "Weight",
+        "sw_consist":          "Consistency",
+        "sw_port_exp":         "Portfolio factor exposure",
+        "sw_exp_warn":         "Exposure warning: {factors} exceed threshold",
         "footer_note":    "For informational purposes only. Not investment advice.",
         "alert_labels": {
             "var_95":    "VaR (95%) > 5% NAV",
@@ -916,15 +1309,43 @@ _T = {
         "dc_skip":        "效益有限",
         "port_exposure":       "组合因子暴露（FF5）",
         "port_exposure_note":  "按市值加权的Fama-French五因子Beta，反映当前股票持仓的整体风格偏向。",
+        "pe_factor":           "因子",
+        "pe_t":                "t值",
+        "pe_sig":              "显著性",
+        "pe_se_note":          "±SE为各持仓加权传播值，独立性假设下为下界。",
         "attribution":         "业绩归因（FF5 — 近{n}个交易日）",
         "attribution_note":    "{start} → {end} · {n}个交易日 · 仅股票持仓 · Beta来自252日OLS回归",
         "attr_factor":         "因子",
         "attr_factor_ret":     "因子收益",
         "attr_contrib":        "贡献度",
-        "factor_rankings":     "个股因子排名（FF5 — 按IR排序）",
-        "factor_rankings_note":"按信息比率（α / σ残差 × √252）降序排列。信号：t(α) > 1.5 = 买入，< −1.5 = 卖出。",
+        "attr_alpha_gross":    "Alpha（毛，选股贡献）",
+        "attr_trading_cost":   "交易成本",
+        "attr_alpha_net":      "Alpha（扣成本后）",
+        "attr_error":          "归因误差：±{e}",
+        "attr_ols_note":       "t值来自组合直接OLS回归（{n}天）",
+        "attr_sig_note":       "★★★ |t|≥3.0高度显著 · ★★ |t|≥2.0显著 · ★ |t|≥1.5边际显著",
+        "factor_rankings":      "个股因子排名（FF5 — 按IR排序）",
+        "factor_rankings_note": "信号使用稳健过滤：PSR>85% + 多窗口一致性 + 多重检验修正IR。括号内为单因子朴素信号（如不同）。子行：63天归因 · PSR · 窗口一致性 · OOS命中率。",
+        "ir_col":               "IR*",
+        "ir_deflated_note":     "IR* = 多重检验修正后IR（Bailey–Lopez de Prado 2014）。PSR = 考虑残差非正态性后的真实α>0概率。OOS = 滚动126天训练/21天测试的信号准确率。",
         "price":               "价格",
         "signal":              "信号",
+        "fmq_title":           "因子模型质量",
+        "fmq_note":            "IC = 预测Alpha排名与实际Alpha排名的截面Spearman秩相关。VIF > 5 表示存在共线性风险。",
+        "fmq_ic_label":        "IC均值（{fwd}日前瞻）",
+        "fmq_icir_label":      "IC-IR（年化）",
+        "fmq_pval_label":      "p值（双尾检验）",
+        "fmq_nobs_label":      "评估期数",
+        "fmq_cond":            "条件数（FF5相关矩阵）",
+        "fmq_vif":             "各因子VIF",
+        "fmq_high_pairs":      "高相关因子对（|r|>0.4）",
+        "fmq_warn":            "警告",
+        "sw_title":            "信号加权配置（买入信号）",
+        "sw_note":             "评分 = PSR × 多重检验修正IR × 一致性加成。权重上限20%，已归一化。条件：robust_signal=BUY，PSR≥65%，IR_deflated>0。",
+        "sw_weight":           "权重",
+        "sw_consist":          "一致性",
+        "sw_port_exp":         "组合因子敞口",
+        "sw_exp_warn":         "敞口警告：{factors} 超过阈值",
         "footer_note":    "本报告仅供参考，不构成投资建议。",
         "alert_labels": {
             "var_95":    "VaR(95%) > 组合市值5%",

@@ -96,12 +96,17 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
     # ── Fama-French 5-factor analysis ─────────────────────────────────────────
     from risk.optimizer        import fetch_ff5
     from strategy.factor_model import (run_factor_regression, portfolio_factor_exposure,
-                                       compute_attribution, enrich_suggestions)
+                                       compute_attribution, enrich_suggestions,
+                                       compute_stock_attribution, explain_stock_drivers,
+                                       compute_robust_signal)
 
     ff5           = fetch_ff5()
     stock_factors: list[dict] = []
     port_exposure             = None
     attribution               = None
+    collinearity              = None
+    ic_result                 = None
+    signal_weights: list[dict] = []
 
     if ff5 is not None:
         # Portfolio factor exposure (weighted average betas of current holdings)
@@ -111,6 +116,10 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
             attribution = compute_attribution(holdings, price_data, ff5, port_exposure)
 
         if run_mode == "full":
+            from strategy.ic_analysis      import compute_universe_ic
+            from strategy.factor_ortho     import check_factor_collinearity
+            from strategy.weight_allocator import compute_signal_weights
+
             # Watchlist factor ranking — load prices for tickers not in holdings
             watchlist_equity = [
                 w for w in load_watchlist()
@@ -129,12 +138,59 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
                         reg["price"] = (float(pd_obj.closes.iloc[-1])
                                         if pd_obj.closes is not None and not pd_obj.closes.empty
                                         else None)
+                        # Robust signal: multi-window + PSR + deflated IR + OOS
+                        robust = compute_robust_signal(
+                            tk, pd_obj.returns, ff5,
+                            n_strategies=len(watchlist_equity),
+                        )
+                        if robust:
+                            reg.update({k: robust[k] for k in (
+                                "psr", "ir_deflated", "ir_raw",
+                                "alpha_consistency", "n_windows",
+                                "oos_hit_rate", "robust_signal",
+                                "window_alphas", "window_t_alphas",
+                            )})
+
+                        # 63-day factor attribution + driver explanation
+                        atr_63 = compute_stock_attribution(tk, pd_obj.returns, ff5, reg, window=63)
+                        if atr_63:
+                            reg["attribution_63d"] = atr_63
+                            reg["driver_en"] = explain_stock_drivers(reg, atr_63, lang="en")
+                            reg["driver_zh"] = explain_stock_drivers(reg, atr_63, lang="zh")
                         stock_factors.append(reg)
 
             stock_factors.sort(
                 key=lambda x: x.get("ir") if x.get("ir") == x.get("ir") else float("-inf"),
                 reverse=True,
             )
+
+            # Factor collinearity diagnostics
+            collinearity = check_factor_collinearity(ff5)
+            if collinearity.get("has_warning"):
+                logger.warning(
+                    f"Factor collinearity detected: "
+                    f"high pairs={collinearity.get('high_pairs')}, "
+                    f"cond#={collinearity.get('condition_number', 0):.1f}"
+                )
+
+            # Cross-sectional IC analysis (temporal validation)
+            ic_result = compute_universe_ic(factor_pd, ff5)
+            if ic_result:
+                logger.info(
+                    f"IC analysis: IC_mean={ic_result['ic_mean']:+.3f}  "
+                    f"ICIR={ic_result['icir']:.2f}  "
+                    f"p={ic_result['pvalue']:.3f}  "
+                    f"n_periods={ic_result['n_obs']}"
+                )
+
+            # Signal-weighted allocation
+            signal_weights = compute_signal_weights(stock_factors)
+            if signal_weights:
+                logger.info(
+                    f"Signal portfolio: {len(signal_weights)} positions, "
+                    f"top={signal_weights[0]['ticker']} {signal_weights[0]['weight']*100:.1f}%"
+                )
+
             logger.info(f"Factor ranking: {len(stock_factors)} stocks | "
                         f"top IR: {stock_factors[0]['ticker'] if stock_factors else '—'}")
     else:
@@ -227,6 +283,9 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
         stock_factors=stock_factors if stock_factors else None,
         port_exposure=port_exposure,
         attribution=attribution,
+        collinearity=collinearity,
+        ic_result=ic_result,
+        signal_weights=signal_weights if signal_weights else None,
     )
     mailer.send_report(html_en, html_zh, rag=metrics["overall_rag"],
                        chart_en=chart_en, chart_zh=chart_zh)
