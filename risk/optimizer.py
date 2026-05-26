@@ -62,7 +62,16 @@ def ff_implied_mu(ret_df: pd.DataFrame, rf: float = 0.035) -> np.ndarray:
     if ff5 is None:
         return ret_df.mean().values * 252
 
-    aligned = ret_df.join(ff5[_FF5_FACTORS + ["RF"]], how="inner")
+    # yfinance returns tz-aware DatetimeIndex; FF5 from pandas_datareader is tz-naive.
+    # Strip timezone from both before joining to avoid TypeError.
+    def _tz_naive(df: pd.DataFrame) -> pd.DataFrame:
+        if df.index.tz is not None:
+            return df.set_axis(df.index.tz_localize(None))
+        return df
+
+    aligned = _tz_naive(ret_df).join(
+        _tz_naive(ff5)[_FF5_FACTORS + ["RF"]], how="inner"
+    )
     if len(aligned) < 60:
         logger.warning(f"Only {len(aligned)} days overlap with FF5 — using historical mean μ")
         return ret_df.mean().values * 252

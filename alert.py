@@ -43,6 +43,17 @@ def _mark_fired(key: str):
     _save_dedup(dedup)
 
 
+# risk_engine uses short alert keys; thresholds.yaml uses longer descriptive keys
+_ALERT_TO_THRESH_KEY = {
+    "var_95":    "var_95_pct",
+    "cvar_ratio":"cvar_var_ratio",
+    "max_dd":    "max_drawdown",
+    "max_pos":   "max_single_position",
+    "daily_loss":"single_day_loss",
+    # hhi, beta, sharpe match directly
+}
+
+
 def check_and_alert(metrics: dict, thresholds: dict):
     """Fire alert emails for any RED metric that hasn't been sent in 24h."""
     alert_map = metrics.get("alerts", {})
@@ -57,7 +68,7 @@ def check_and_alert(metrics: dict, thresholds: dict):
             logger.info(f"Alert {key} suppressed (already sent today)")
             continue
 
-        cfg        = t_cfg.get(key, {})
+        cfg        = t_cfg.get(_ALERT_TO_THRESH_KEY.get(key, key), {})
         value      = _get_value(metrics, key)
         threshold  = cfg.get("threshold", "?")
         label_en   = cfg.get("label_en", key)
