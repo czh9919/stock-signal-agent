@@ -7,7 +7,7 @@ on:
     branches: [main, master]
 
 jobs:
-  syntax-check:
+  syntax-and-import:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,18 +19,63 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Install core dependencies
+      - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install yfinance ta anthropic APScheduler Jinja2 sendgrid \
-            newsapi-python pandas numpy requests python-dotenv PyYAML
+          pip install -r requirements.txt
 
-      - name: Syntax check
+      - name: Syntax check — all source files
         run: |
           python -m py_compile \
-            main.py scheduler.py \
+            main.py scheduler.py alert.py \
             data/fetcher.py data/cleaner.py data/storage.py \
+            data/fetch_holdings.py data/price_loader.py data/cache.py \
             strategy/indicators.py strategy/signals.py strategy/ai_analyst.py \
             backtest/historical.py backtest/tracker.py \
-            notify/renderer.py notify/mailer.py
+            risk/risk_engine.py risk/stress.py risk/optimizer.py \
+            notify/renderer.py notify/mailer.py notify/report_gen.py notify/chart.py
           echo "All files pass syntax check"
+
+      - name: Import smoke test
+        run: |
+          python - <<'EOF'
+          from risk.optimizer    import compute_frontier, rebalancing_suggestions
+          from notify.chart      import risk_return_png
+          from notify.report_gen import build_report
+          from notify.mailer     import send_report
+
+          frontier = {
+              "mc": [(0.15, 0.10, 0.8), (0.20, 0.12, 0.5)],
+              "current": {"vol": 0.18, "ret": 0.11, "sharpe": 0.72,
+                          "weights": {"AAPL": 0.6, "MSFT": 0.4}},
+              "assets":  [{"ticker": "AAPL", "vol": 0.22, "ret": 0.14},
+                          {"ticker": "MSFT", "vol": 0.19, "ret": 0.12}],
+              "optimal": {"vol": 0.16, "ret": 0.13, "sharpe": 1.1,
+                          "weights": {"AAPL": 0.4, "MSFT": 0.6}},
+          }
+          suggestions = rebalancing_suggestions(
+              [{"ticker": "AAPL", "weight": 0.6, "asset_class": "equity",
+                "unrealised_pnl_gbp": 500},
+               {"ticker": "MSFT", "weight": 0.4, "asset_class": "equity",
+                "unrealised_pnl_gbp": 200}],
+              frontier, nav_gbp=10000,
+          )
+          chart = risk_return_png(frontier, "en")
+          assert len(chart) > 1000, "chart PNG unexpectedly small"
+
+          metrics = {"overall_rag": "GREEN", "nav_gbp": 10000,
+                     "total_pnl_gbp": 500, "var_95_ewma": 0.03,
+                     "sharpe": 0.9, "alerts": {}}
+          holdings = [{"ticker": "AAPL", "platform": "IBKR", "weight": 0.6,
+                       "market_value_gbp": 6000, "cost_basis_gbp": 5000,
+                       "unrealised_pnl_gbp": 1000, "asset_class": "equity"}]
+          html_en, html_zh = build_report(
+              metrics, {}, holdings, {},
+              frontier=frontier, suggestions=suggestions,
+              has_chart_en=True, has_chart_zh=False,
+          )
+          assert "cid:rrChart" in html_en
+          assert "Act" in html_en
+          assert "立即行动" in html_zh
+          print("Smoke test passed")
+          EOF

@@ -87,3 +87,81 @@ class Mailer:
         path = BACKUP_DIR / f"report_{date.today()}.html"
         path.write_text(html, encoding="utf-8")
         logger.info(f"Email backup written to {path}")
+
+
+# ── Portfolio risk helpers (standalone, no config object needed) ──────────────
+
+def _smtp_send(html: str, subject: str, plain: str = "",
+               chart_bytes: bytes = b"", cid: str = "rrChart") -> bool:
+    """Low-level SMTP send using env vars directly. Embeds chart as CID inline image when provided."""
+    from email.mime.image import MIMEImage
+
+    host      = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    port      = int(os.environ.get("SMTP_PORT", 587))
+    user      = os.environ.get("SMTP_USER", "")
+    password  = os.environ.get("SMTP_PASS", "")
+    recipient = os.environ.get("REPORT_TO_EMAIL") or os.environ.get("RECIPIENT_EMAIL", "")
+
+    if not recipient:
+        logger.error("No recipient configured (REPORT_TO_EMAIL / RECIPIENT_EMAIL)")
+        return False
+
+    if chart_bytes:
+        # multipart/related wraps the HTML + inline PNG so Gmail renders the chart
+        msg = MIMEMultipart("related")
+        msg["Subject"] = subject
+        msg["From"]    = user
+        msg["To"]      = recipient
+        alt = MIMEMultipart("alternative")
+        if plain:
+            alt.attach(MIMEText(plain, "plain"))
+        alt.attach(MIMEText(html, "html"))
+        msg.attach(alt)
+        img = MIMEImage(chart_bytes, _subtype="png")
+        img.add_header("Content-ID", f"<{cid}>")
+        img.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
+        msg.attach(img)
+    else:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = user
+        msg["To"]      = recipient
+        if plain:
+            msg.attach(MIMEText(plain, "plain"))
+        msg.attach(MIMEText(html, "html"))
+
+    try:
+        with smtplib.SMTP(host, port) as server:
+            server.ehlo()
+            server.starttls()
+            if user and password:
+                server.login(user, password)
+            server.sendmail(user, recipient, msg.as_string())
+        logger.info(f"Portfolio email sent: {subject[:60]}")
+        return True
+    except Exception as e:
+        logger.error(f"Portfolio email failed: {e}")
+        backup = BACKUP_DIR / f"portfolio_{date.today()}.html"
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backup.write_text(html, encoding="utf-8")
+        return False
+
+
+def send_report(html_en: str, html_zh: str, rag: str = "GREEN",
+                chart_en: bytes = b"", chart_zh: bytes = b""):
+    """Send bilingual daily portfolio risk report with optional inline charts."""
+    rag_label    = {"RED": "RED", "AMBER": "AMBER", "GREEN": "GREEN"}.get(rag, rag)
+    rag_label_zh = {"RED": "红",  "AMBER": "黄",    "GREEN": "绿"}.get(rag, rag)
+    today = date.today().isoformat()
+    _smtp_send(html_en, f"[Daily] Portfolio Report — {today} — Risk: {rag_label}",
+               chart_bytes=chart_en)
+    _smtp_send(html_zh, f"[日报] 投资组合报告 — {today} — 风险等级: {rag_label_zh}",
+               chart_bytes=chart_zh)
+
+
+def send_alert(metric: str, value: str, threshold: str, metric_zh: str = ""):
+    """Send bilingual threshold breach alert."""
+    html_en = f"<p><b>{metric}</b> breached threshold.<br>Current: {value} | Threshold: {threshold}</p>"
+    html_zh = f"<p><b>{metric_zh or metric}</b> 触发预警。<br>当前值: {value}，阈值: {threshold}</p>"
+    _smtp_send(html_en, f"[ALERT] {metric} breached — {value} vs {threshold}")
+    _smtp_send(html_zh, f"[预警] {metric_zh or metric} 触发阈值 — {value} / {threshold}")

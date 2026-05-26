@@ -1,0 +1,20 @@
+ewma:
+  lambda: 0.94          # RiskMetrics standard
+  init_window: 21       # days to seed σ²₀
+
+garch:
+  omega: 0.000001
+  alpha: 0.05
+  beta:  0.94           # alpha + beta < 1 enforced
+
+windows:
+  fixed:        252     # historical sim, Sharpe, Beta, MaxDD
+  correlation:   63     # rolling Pearson (≈ 1 quarter)
+  monte_carlo:   63     # EWMA covariance for MC paths
+  min_var:       21     # below this → skip holding from risk calcs
+
+monte_carlo:
+  paths:        10000
+  horizon_days:    30
+
+risk_free_rate: 0.045   # 4.5% p.a. for Sharpe
