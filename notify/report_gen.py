@@ -475,19 +475,79 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
     # ── Monte Carlo ────────────────────────────────────────────────────────────
     mc = (stress or {}).get("monte_carlo", {})
     if mc:
+        mc_model   = mc.get("model", "GARCH-CC")
+        mc_margin  = mc.get("margin_call_prob", 0.0) or 0.0
+        margin_row = ""
+        if mc_margin > 0.001:
+            m_col = "#c0392b" if mc_margin > 0.05 else "#e67e22"
+            margin_row = (
+                f"<tr><td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;"
+                f"font-size:12px;color:#555'>{t['mc_margin']}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;"
+                f"font-size:12px;color:{m_col};font-weight:600'>"
+                f"{_pct(mc_margin)}</td></tr>"
+            )
+
+        cgt_eur = mc.get("cgt_median_eur", 0.0) or 0.0
+        tc_eur  = mc.get("trading_cost_eur", 0.0) or 0.0
+
         sections.append(f"""
 <div style="padding:0 20px 16px">
   <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
     {t['monte_carlo']}
   </h2>
-  <p style="font-size:13px;color:#555;margin:4px 0">
-    {mc.get('paths',0):,} {t['mc_paths']} · {mc.get('horizon_days',30)}{t['mc_days']}
+  <p style="font-size:11px;color:#aaa;margin:0 0 8px">
+    {mc.get('paths',0):,} {t['mc_paths']} · {mc.get('horizon_days',21)}{t['mc_days']} · {mc_model}
   </p>
-  <p style="font-size:13px;margin:4px 0">
-    VaR(95%) <b style="color:#c0392b">{_pct(mc.get('var_95'))}</b> ({_eur(mc.get('eur_var_95'))})&nbsp;&nbsp;
-    CVaR <b style="color:#c0392b">{_pct(mc.get('cvar_95'))}</b>&nbsp;&nbsp;
-    P(+) <b style="color:#27ae60">{_pct(mc.get('p_positive'))}</b>
-  </p>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#f8f9ff">
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['metric']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['value']}</th>
+    </tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+      VaR (95%)</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;
+          color:#c0392b;font-weight:600">
+        {_pct(mc.get('var_95'))} &nbsp;<span style="color:#888;font-weight:400">({_eur(mc.get('eur_var_95'))})</span>
+      </td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+      VaR (99%)</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;
+          color:#c0392b;font-weight:600">
+        {_pct(mc.get('var_99'))} &nbsp;<span style="color:#888;font-weight:400">({_eur(mc.get('eur_var_99'))})</span>
+      </td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+      CVaR (95%)</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;
+          color:#c0392b;font-weight:600">
+        {_pct(mc.get('cvar_95'))} &nbsp;<span style="color:#888;font-weight:400">({_eur(mc.get('cvar_95_eur'))})</span>
+      </td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+      {t['mc_max_dd']}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#e67e22;font-weight:600">
+        {_pct(mc.get('max_dd_mean'))} &nbsp;<span style="color:#888;font-weight:400">{t['mc_p95']}: {_pct(mc.get('max_dd_p95'))}</span>
+      </td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+      {t['mc_loss_probs']}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+        P(&gt;5%) <b>{_pct(mc.get('prob_loss_5pct',mc.get('var_95',0)))}</b> &nbsp;
+        P(&gt;10%) <b>{_pct(mc.get('prob_loss_10pct'))}</b> &nbsp;
+        P(&gt;20%) <b>{_pct(mc.get('prob_loss_20pct'))}</b>
+      </td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+      {t['mc_decision']}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+        P(+) <b style="color:#27ae60">{_pct(mc.get('p_positive'))}</b> &nbsp;
+        Sharpe <b>{_f(mc.get('sharpe_median'))}</b> &nbsp;
+        Sortino <b>{_f(mc.get('sortino_median'))}</b>
+      </td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+      {t['mc_costs']}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555">
+        {t['mc_tc']} <b>{_eur(tc_eur)}</b> &nbsp; {t['mc_cgt']} <b>{_eur(cgt_eur)}</b>
+      </td></tr>
+    {margin_row}
+  </table>
 </div>""")
 
     # ── Correlation breakdown ──────────────────────────────────────────────────
@@ -577,6 +637,14 @@ _T = {
         "monte_carlo":    "Monte Carlo Simulation",
         "mc_paths":       "paths",
         "mc_days":        "-day horizon",
+        "mc_max_dd":      "Max Drawdown (avg paths)",
+        "mc_p95":         "95th pct",
+        "mc_loss_probs":  "Loss Probabilities",
+        "mc_decision":    "Decision Metrics",
+        "mc_costs":       "Liquidation Costs",
+        "mc_tc":          "Trade:",
+        "mc_cgt":         "CGT (median):",
+        "mc_margin":      "Margin Call Probability",
         "corr_breakdown": "Correlation Breakdown",
         "normal_sigma":   "Normal σ:",
         "crisis_sigma":   "Crisis σ:",
@@ -644,6 +712,14 @@ _T = {
         "monte_carlo":    "蒙特卡洛模拟",
         "mc_paths":       "条路径",
         "mc_days":        "天期限",
+        "mc_max_dd":      "最大回撤（路径均值）",
+        "mc_p95":         "95分位",
+        "mc_loss_probs":  "亏损概率",
+        "mc_decision":    "决策指标",
+        "mc_costs":       "清仓成本",
+        "mc_tc":          "交易成本：",
+        "mc_cgt":         "CGT税（中位）：",
+        "mc_margin":      "追加保证金概率",
         "corr_breakdown": "相关性击穿分析",
         "normal_sigma":   "正常市场σ:",
         "crisis_sigma":   "危机市场σ:",

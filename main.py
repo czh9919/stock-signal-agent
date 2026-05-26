@@ -226,11 +226,12 @@ def run_portfolio_pipeline(run_mode: str = "full"):
         logger.info("alert_check — skipping full report")
         return
 
-    from risk.stress       import run_all as run_stress
-    from risk.optimizer    import compute_frontier, rebalancing_suggestions, marginal_impact
-    from notify.report_gen import build_report
-    from notify.chart      import risk_return_png
-    from notify            import mailer
+    from risk.stress        import run_all as run_stress
+    from risk.optimizer     import compute_frontier, rebalancing_suggestions, marginal_impact
+    from risk.mc_portfolio  import run_mc_portfolio
+    from notify.report_gen  import build_report
+    from notify.chart       import risk_return_png
+    from notify             import mailer
 
     stress      = run_stress(holdings, price_data, metrics["nav_eur"], vol_cfg=vol_cfg)
     snapshot    = {"holdings": holdings, "metrics": {k:v for k,v in metrics.items() if k != "alerts"}}
@@ -242,6 +243,39 @@ def run_portfolio_pipeline(run_mode: str = "full"):
     suggestions = rebalancing_suggestions(holdings, frontier, nav_eur=metrics["nav_eur"])
     chart_en    = risk_return_png(frontier, "en")
     chart_zh    = risk_return_png(frontier, "zh")
+
+    mc_result = run_mc_portfolio(holdings, price_data, rf=rf)
+    if mc_result:
+        tail = mc_result["tail"]
+        dec  = mc_result["decision"]
+        stress["monte_carlo"] = {
+            "paths":            tail["n_paths"],
+            "horizon_days":     tail["horizon_days"],
+            "model":            "GARCH-CC",
+            "var_95":           tail["var_95_pct"],
+            "eur_var_95":       tail["var_95_eur"],
+            "var_99":           tail["var_99_pct"],
+            "eur_var_99":       tail["var_99_eur"],
+            "cvar_95":          tail["cvar_95_pct"],
+            "cvar_95_eur":      tail["cvar_95_eur"],
+            "max_dd_mean":      tail["max_dd_mean"],
+            "max_dd_p95":       tail["max_dd_p95"],
+            "prob_loss_10pct":  tail["prob_loss_10pct"],
+            "prob_loss_20pct":  tail["prob_loss_20pct"],
+            "margin_call_prob": tail["margin_call_prob"],
+            "p_positive":       dec["win_rate"],
+            "sharpe_median":    dec["sharpe_median"],
+            "sortino_median":   dec["sortino_median"],
+            "ann_ret_median":   dec["ann_ret_median"],
+            "ann_vol_median":   dec["ann_vol_median"],
+            "trading_cost_eur": mc_result["costs"]["trading_eur"],
+            "cgt_median_eur":   mc_result["costs"]["cgt_median_eur"],
+        }
+        logger.info(
+            f"MC: VaR95={tail['var_95_pct']*100:.1f}%  "
+            f"CVaR95={tail['cvar_95_pct']*100:.1f}%  "
+            f"P(+)={dec['win_rate']*100:.0f}%"
+        )
 
     # ── Diversification candidates (bonds + gold from watchlist) ──────────────
     watchlist_all  = load_watchlist()

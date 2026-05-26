@@ -39,6 +39,7 @@ jobs:
             strategy/indicators.py strategy/signals.py strategy/ai_analyst.py \
             backtest/historical.py backtest/tracker.py backtest/walk_forward.py \
             risk/risk_engine.py risk/stress.py risk/optimizer.py \
+            risk/mc_engine.py risk/mc_portfolio.py \
             notify/renderer.py notify/mailer.py notify/report_gen.py notify/chart.py
           echo "All files pass syntax check"
 
@@ -46,6 +47,8 @@ jobs:
         run: |
           python - <<'EOF'
           from risk.optimizer    import compute_frontier, rebalancing_suggestions, ff_implied_mu
+          from risk.mc_engine    import simulate_paths
+          from risk.mc_portfolio import run_mc_portfolio
           from notify.chart      import risk_return_png
           from notify.report_gen import build_report
           from notify.mailer     import send_report
