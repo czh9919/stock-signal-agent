@@ -4,16 +4,16 @@ Usage: python test_pipeline.py
 """
 import os
 import sys
-import json
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
-# ── helpers ──────────────────────────────────────────────────────────────────
 
 PASS = "[PASS]"
 FAIL = "[FAIL]"
@@ -61,22 +61,15 @@ if loaded is not None and len(loaded) > 0:
 else:
     err("SQLite round-trip failed")
 
-news = fetcher.fetch_news(TICKER, limit=5)
-if news:
-    ok(f"fetch_news: {len(news)} articles — \"{news[0]['title'][:60]}...\"")
-    storage.save_news(TICKER, news)
-else:
-    skip("fetch_news: no articles returned (NewsAPI may be rate-limited)")
-
 price = fetcher.fetch_current_price(TICKER)
 if price:
     ok(f"fetch_current_price: ${price:.2f}")
 else:
     err("fetch_current_price failed")
 
-# ── Phase 2: Strategy layer ───────────────────────────────────────────────────
+# ── Phase 2: Technical indicators ────────────────────────────────────────────
 
-section("Phase 2a — Technical Indicators")
+section("Phase 2 — Technical Indicators + Signals")
 
 from strategy.indicators import IndicatorCalculator
 from strategy.signals import evaluate_signals
@@ -91,110 +84,113 @@ if ind:
     ok(f"RSI(14): {ind['rsi14']:.2f}")
     ok(f"BB:      upper={ind['bb_upper']:.2f}  lower={ind['bb_lower']:.2f}")
     ok(f"ATR(14): {ind['atr14']:.2f}")
-    ok(f"Volume:  {ind['volume']:,.0f}  (10d avg {ind['volume_sma10']:,.0f})")
 else:
     err("IndicatorCalculator.compute returned None")
     sys.exit(1)
 
-section("Phase 2b — Signal Rules")
-
 signals = evaluate_signals(ind)
-ok(f"Signal score: {signals.score:.2f}")
-for s in signals.bullish:
-    ok(f"  BULL: {s}")
-for s in signals.bearish:
-    ok(f"  BEAR: {s}")
-for s in signals.neutral:
-    ok(f"  NEUT: {s}")
+ok(f"Signal score: {signals.score:.2f}  |  "
+   f"bull={len(signals.bullish)}  bear={len(signals.bearish)}")
 
-section("Phase 2c — Claude AI Analysis")
+# ── Phase 3: FF5 Factor model ─────────────────────────────────────────────────
 
-api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not api_key:
-    skip("ANTHROPIC_API_KEY not set — skipping AI analysis")
+section("Phase 3 — Fama-French 5-Factor Regression")
+
+from strategy.factor_model import run_factor_regression, portfolio_factor_exposure
+
+# Synthetic test with known beta
+rng = np.random.default_rng(42)
+n   = 300
+idx = pd.date_range("2022-01-01", periods=n, freq="B")
+cols = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
+ff5_syn = pd.DataFrame(rng.normal(0, 0.01, (n, 6)), index=idx, columns=cols)
+ff5_syn["RF"] = 0.00012
+ret_syn = pd.Series(ff5_syn["Mkt-RF"] * 1.1 + 0.0003 + rng.normal(0, 0.008, n), index=idx)
+
+res = run_factor_regression("SYNTHETIC", ret_syn, ff5_syn, window=252)
+if res:
+    ok(f"Regression: α={res['alpha_ann']*100:+.1f}%  β_MKT={res['beta_mkt']:.2f}  "
+       f"t={res['t_alpha']:.2f}  IR={res['ir']:.3f}  R²={res['r_squared']:.2f}  signal={res['signal']}")
 else:
-    from strategy.ai_analyst import AIAnalyst
-    analyst = AIAnalyst()
-    suggestion, raw = analyst.analyze(TICKER, ind, signals, news or [])
-    if suggestion:
-        ok(f"Recommendation : {suggestion.get('recommendation')}")
-        ok(f"Confidence     : {suggestion.get('confidence'):.2f}")
-        ok(f"Sentiment score: {suggestion.get('sentiment_score')}")
-        ok(f"Feasibility    : {suggestion.get('feasibility')}")
-        ok(f"Risk factors   : {suggestion.get('risk_factors')}")
-        storage.save_suggestion(TICKER, suggestion, price, raw)
-        ok("Suggestion saved to DB")
+    err("run_factor_regression returned None for 300-day series")
+
+res_short = run_factor_regression("SHORT", ret_syn.iloc[:30], ff5_syn.iloc[:30])
+if res_short is None:
+    ok("Correctly returns None for <63 days")
+else:
+    err("Should return None for <63 days")
+
+# Live FF5 fetch (optional — requires pandas_datareader + internet)
+try:
+    from risk.optimizer import fetch_ff5
+    ff5_live = fetch_ff5()
+    if ff5_live is not None:
+        ok(f"FF5 live data: {len(ff5_live)} rows "
+           f"({ff5_live.index[0].date()} – {ff5_live.index[-1].date()})")
+        # Run regression with real AAPL data aligned to FF5
+        from data.price_loader import load_prices
+        aapl_pd = load_prices([TICKER], days=300).get(TICKER)
+        if aapl_pd and aapl_pd.returns is not None:
+            res_live = run_factor_regression(TICKER, aapl_pd.returns, ff5_live)
+            if res_live:
+                ok(f"{TICKER} live: α={res_live['alpha_ann']*100:+.1f}%  "
+                   f"β_MKT={res_live['beta_mkt']:.2f}  IR={res_live['ir']:.3f}  "
+                   f"signal={res_live['signal']}  n={res_live['n_days']}")
+            else:
+                skip(f"{TICKER}: too few aligned days")
     else:
-        err("AI analysis returned None — check logs")
-        print(f"  Raw response: {raw[:300]}")
+        skip("FF5 fetch failed — check pandas_datareader / internet")
+except Exception as e:
+    skip(f"FF5 live test skipped: {e}")
 
-# ── Phase 3: Notify layer ─────────────────────────────────────────────────────
+# ── Phase 4: Report generation ────────────────────────────────────────────────
 
-section("Phase 3 — Report Rendering & Email")
+section("Phase 4 — Report Generation")
 
-from notify.renderer import ReportRenderer
+from notify.report_gen import build_report
 
-dummy_result = {
-    "ticker": TICKER,
-    "price": price,
-    "recommendation": (suggestion or {}).get("recommendation", "HOLD"),
-    "confidence": (suggestion or {}).get("confidence", 0.7),
-    "signal_score": signals.score,
-    "sentiment_score": (suggestion or {}).get("sentiment_score", 0.0),
-    "feasibility": (suggestion or {}).get("feasibility", "Test run"),
-    "key_levels": (suggestion or {}).get("key_levels", {}),
-    "risk_factors": (suggestion or {}).get("risk_factors", []),
-    "key_events": (suggestion or {}).get("key_events", []),
-    "bullish_signals": signals.bullish,
-    "bearish_signals": signals.bearish,
-    "sma20": f"{ind['sma20']:.2f}", "sma50": str(ind['sma50'] or "N/A"),
-    "sma200": str(ind['sma200'] or "N/A"),
-    "macd": f"{ind['macd']:.4f}", "macd_signal": f"{ind['macd_signal']:.4f}",
-    "rsi14": f"{ind['rsi14']:.2f}",
-    "bb_upper": f"{ind['bb_upper']:.2f}", "bb_lower": f"{ind['bb_lower']:.2f}",
-    "atr14": f"{ind['atr14']:.2f}",
-    "low_confidence": False, "consecutive_buy": False,
-    "data_warning": bool(warns), "no_news": not news,
+metrics = {"overall_rag": "GREEN", "nav_eur": 50000,
+           "total_pnl_eur": 2500, "var_95_ewma": 0.025,
+           "var_95_cf": 0.028, "var_99_cf": 0.042, "var_99_evt": 0.045,
+           "cvar_95": 0.035, "sharpe": 1.1, "beta": 1.05,
+           "max_drawdown": 0.12, "hhi": 0.18, "max_position_wt": 0.25,
+           "port_sigma_annual": 0.18, "alerts": {}}
+holdings_test = [
+    {"ticker": TICKER, "platform": "IBKR", "weight": 0.60,
+     "market_value_eur": 30000, "cost_basis_eur": 25000,
+     "unrealised_pnl_eur": 5000, "asset_class": "equity"},
+]
+stock_factors_test = [
+    {"ticker": TICKER, "price": price, "signal": "BUY",
+     "alpha_ann": 0.08, "beta_mkt": 1.15, "t_alpha": 2.1,
+     "ir": 0.45, "r_squared": 0.72, "n_days": 252},
+]
+port_exposure_test = {
+    "alpha_ann": 0.06, "beta_mkt": 1.12, "beta_smb": 0.18,
+    "beta_hml": -0.08, "beta_rmw": 0.25, "beta_cma": -0.04,
 }
 
-renderer = ReportRenderer()
-html = renderer.render([dummy_result])
+html_en, html_zh = build_report(
+    metrics, {}, holdings_test, {},
+    stock_factors=stock_factors_test,
+    port_exposure=port_exposure_test,
+)
+ok(f"EN report: {len(html_en):,} chars")
+ok(f"ZH report: {len(html_zh):,} chars")
+
+assert "Stock Factor Rankings" in html_en, "factor rankings missing from EN"
+assert "个股因子排名" in html_zh, "factor rankings missing from ZH"
+assert "Portfolio Factor Exposures" in html_en, "portfolio exposure missing from EN"
+assert "BUY" in html_en
+ok("Factor sections present in both languages")
+
 preview_path = Path("data/test_report.html")
 preview_path.parent.mkdir(exist_ok=True)
-preview_path.write_text(html, encoding="utf-8")
-ok(f"HTML report rendered — {len(html):,} chars → {preview_path}")
+preview_path.write_text(html_en, encoding="utf-8")
+ok(f"HTML preview → {preview_path}")
 
-sendgrid_key = os.environ.get("SENDGRID_API_KEY")
-recipient    = os.environ.get("RECIPIENT_EMAIL")
-if sendgrid_key and recipient:
-    from notify.mailer import Mailer
-    import yaml, re
-    with open("config/settings.yaml", encoding="utf-8") as _f:
-        _raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), _f.read())
-    _cfg = yaml.safe_load(_raw)
-    email_cfg = _cfg.get("email", {})
-    email_cfg["subject_prefix"] = "[Stock Agent TEST]"
-    mailer = Mailer(email_cfg)
-    sent = mailer.send(html)
-    if sent:
-        ok(f"Email sent to {recipient}")
-    else:
-        err("Email send failed — check SendGrid key or see data/email_backup/")
-else:
-    skip("SENDGRID_API_KEY or RECIPIENT_EMAIL not set — skipping email send")
-
-# ── Phase 4: Backtest tracker ─────────────────────────────────────────────────
-
-section("Phase 4 — Backtest Tracker")
-
-from backtest.tracker import SuggestionTracker
-tracker = SuggestionTracker(storage, fetcher)
-tracker.evaluate_pending()
-accuracy = storage.get_accuracy_report()
-ok(f"Accuracy report: {accuracy if accuracy else 'no evaluated suggestions yet (need 30-day history)'}")
-
-# ── Cleanup ───────────────────────────────────────────────────────────────────
+# ── Summary ───────────────────────────────────────────────────────────────────
 
 section("Summary")
-print("  All phases completed. Check data/test_report.html for HTML preview.")
-print("  Run main.py for the full production pipeline.\n")
+print("  All phases completed.")
+print("  Open data/test_report.html to inspect the HTML report.\n")

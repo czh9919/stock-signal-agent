@@ -3,13 +3,12 @@ name: Daily Stock & Portfolio Analysis
 on:
   schedule:
     # All times UTC. ET = UTC-4 (EDT) / UTC-5 (EST). Dublin = UTC+0/+1.
-    - cron: '0 9 * * 1-5'    # 09:00 UTC → RUN_MODE=stock  (Dublin pre-open)
     - cron: '0 14 * * 1-5'   # 14:00 UTC → RUN_MODE=alert_check (09:00 ET pre-market)
     - cron: '30 21 * * 1-5'  # 21:30 UTC → RUN_MODE=full (16:30 ET after close)
   workflow_dispatch:
     inputs:
       run_mode:
-        description: 'Run mode: stock | portfolio | full | alert_check'
+        description: 'Run mode: portfolio | full | alert_check'
         required: false
         default: 'full'
 
@@ -71,9 +70,7 @@ jobs:
             echo "run_mode=$INPUT_MODE" >> $GITHUB_OUTPUT
           else
             HOUR=$(date -u +%H)
-            if [ "$HOUR" = "09" ]; then
-              echo "run_mode=stock" >> $GITHUB_OUTPUT
-            elif [ "$HOUR" = "14" ]; then
+            if [ "$HOUR" = "14" ]; then
               echo "run_mode=alert_check" >> $GITHUB_OUTPUT
             else
               echo "run_mode=full" >> $GITHUB_OUTPUT
@@ -83,9 +80,6 @@ jobs:
       - name: Run agent
         env:
           RUN_MODE: ${{ steps.mode.outputs.run_mode }}
-          # Claude / AI
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          NEWS_API_KEY:       ${{ secrets.NEWS_API_KEY }}
           # Broker APIs
           IBKR_FLEX_TOKEN:    ${{ secrets.IBKR_FLEX_TOKEN }}
           IBKR_QUERY_ID:      ${{ secrets.IBKR_QUERY_ID }}

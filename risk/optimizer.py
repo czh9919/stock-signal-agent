@@ -20,7 +20,7 @@ _FF5_FACTORS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
 _FF5_CACHE   = Path("cache/ff5_daily.pkl")
 
 
-def _fetch_ff5() -> Optional[pd.DataFrame]:
+def fetch_ff5() -> Optional[pd.DataFrame]:
     """Download Fama-French 5-factor daily data from Ken French's library; cache for 20 h."""
     import time
     if _FF5_CACHE.exists() and (time.time() - _FF5_CACHE.stat().st_mtime) < 72000:
@@ -58,7 +58,7 @@ def ff_implied_mu(ret_df: pd.DataFrame, rf: float = 0.035) -> np.ndarray:
     Falls back to ret_df.mean() × 252 when FF data is unavailable or fewer
     than 60 days align with the return series.
     """
-    ff5 = _fetch_ff5()
+    ff5 = fetch_ff5()
     if ff5 is None:
         return ret_df.mean().values * 252
 

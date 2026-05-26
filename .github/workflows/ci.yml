@@ -36,22 +36,36 @@ jobs:
             data/fetcher.py data/cleaner.py data/storage.py \
             data/fetch_holdings.py data/price_loader.py data/cache.py \
             data/spy_universe.py \
-            strategy/indicators.py strategy/signals.py strategy/ai_analyst.py \
-            backtest/historical.py backtest/tracker.py backtest/walk_forward.py \
+            strategy/indicators.py strategy/signals.py strategy/factor_model.py \
+            backtest/historical.py backtest/walk_forward.py \
             risk/risk_engine.py risk/stress.py risk/optimizer.py \
             risk/mc_engine.py risk/mc_portfolio.py \
-            notify/renderer.py notify/mailer.py notify/report_gen.py notify/chart.py
+            notify/mailer.py notify/report_gen.py notify/chart.py
           echo "All files pass syntax check"
 
       - name: Import smoke test
         run: |
           python - <<'EOF'
-          from risk.optimizer    import compute_frontier, rebalancing_suggestions, ff_implied_mu
-          from risk.mc_engine    import simulate_paths
-          from risk.mc_portfolio import run_mc_portfolio
-          from notify.chart      import risk_return_png
-          from notify.report_gen import build_report
-          from notify.mailer     import send_report
+          import numpy as np, pandas as pd
+          from risk.optimizer        import compute_frontier, rebalancing_suggestions, ff_implied_mu, fetch_ff5
+          from risk.mc_engine        import simulate_paths
+          from risk.mc_portfolio     import run_mc_portfolio
+          from notify.chart          import risk_return_png
+          from notify.report_gen     import build_report
+          from notify.mailer         import send_report
+          from strategy.factor_model import run_factor_regression, portfolio_factor_exposure
+
+          # Factor model smoke test
+          rng = np.random.default_rng(0)
+          n   = 300
+          idx = pd.date_range("2023-01-01", periods=n, freq="B")
+          cols = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
+          ff5  = pd.DataFrame(rng.normal(0, 0.01, (n, 6)), index=idx, columns=cols)
+          ff5["RF"] = 0.00012
+          ret  = pd.Series(ff5["Mkt-RF"] * 1.1 + 0.0002 + rng.normal(0, 0.008, n), index=idx)
+          res  = run_factor_regression("TEST", ret, ff5)
+          assert res is not None and res["signal"] in ("BUY", "SELL", "HOLD")
+          assert run_factor_regression("SHORT", ret.iloc[:30], ff5.iloc[:30]) is None
 
           frontier = {
               "mc": [(0.15, 0.10, 0.8), (0.20, 0.12, 0.5)],
@@ -89,11 +103,18 @@ jobs:
                "currency": "USD", "asset_class": "gold", "name": "SPDR Gold Shares"},
           ]
           fx_rates = {"USDEUR": 0.920, "GBPEUR": 1.170, "AUDEUR": 0.590}
+          stock_factors = [
+              {"ticker": "AAPL", "price": 189.5, "signal": "BUY", "alpha_ann": 0.08,
+               "beta_mkt": 1.15, "t_alpha": 2.1, "ir": 0.45, "r_squared": 0.72, "n_days": 252},
+          ]
+          port_exposure = {"alpha_ann": 0.05, "beta_mkt": 1.1, "beta_smb": 0.2,
+                           "beta_hml": -0.1, "beta_rmw": 0.3, "beta_cma": -0.05}
           html_en, html_zh = build_report(
               metrics, {}, holdings, {},
               frontier=frontier, suggestions=suggestions,
               has_chart_en=True, has_chart_zh=False,
               div_candidates=div_candidates, fx_rates=fx_rates,
+              stock_factors=stock_factors, port_exposure=port_exposure,
           )
           assert "cid:rrChart" in html_en
           assert "Act" in html_en
@@ -103,5 +124,9 @@ jobs:
           assert "TLT" in html_en and "GLD" in html_en, "candidate tickers missing"
           assert "0.920" in html_en, "USD/EUR FX rate missing"
           assert chr(163) not in html_en, "GBP pound sign leaked into EUR report"
+          assert "Stock Factor Rankings" in html_en, "factor rankings section missing"
+          assert "个股因子排名" in html_zh, "factor rankings ZH section missing"
+          assert "Portfolio Factor Exposures" in html_en, "portfolio exposure section missing"
+          assert "AAPL" in html_en and "BUY" in html_en, "factor ranking content missing"
           print("Smoke test passed")
           EOF

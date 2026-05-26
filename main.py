@@ -1,9 +1,9 @@
 """
 Unified entry point.
-RUN_MODE=stock       → stock selection pipeline only
-RUN_MODE=portfolio   → portfolio risk pipeline only
-RUN_MODE=full        → both (default)
+RUN_MODE=portfolio   → portfolio risk pipeline only (no watchlist factor ranking)
+RUN_MODE=full        → portfolio pipeline + watchlist FF5 factor ranking (default)
 RUN_MODE=alert_check → portfolio threshold check only (no report)
+RUN_MODE=backtest    → walk-forward backtest
 """
 import logging
 import os
@@ -51,138 +51,7 @@ def load_watchlist(path: str = "config/watchlist.csv") -> list[dict]:
         return list(csv.DictReader(f))
 
 
-# ── Stock pipeline ─────────────────────────────────────────────────────────────
-
-def run_stock_pipeline(config: dict):
-    logger = logging.getLogger("stock")
-    logger.info("=== Stock AI Agent — starting ===")
-
-    limits     = config.get("limits", {})
-    claude_cfg = config.get("claude", {})
-    db_path    = config.get("database", {}).get("path", "data/stock_agent.db")
-
-    from data.cleaner   import DataCleaner
-    from data.fetcher   import StockFetcher
-    from data.storage   import Storage
-    from strategy.indicators import IndicatorCalculator
-    from strategy.signals    import evaluate_signals
-    from strategy.ai_analyst import AIAnalyst
-    from backtest.tracker    import SuggestionTracker
-    from notify.renderer     import ReportRenderer
-    from notify.mailer       import Mailer
-
-    storage   = Storage(db_path)
-    fetcher   = StockFetcher()
-    cleaner   = DataCleaner()
-    indicator = IndicatorCalculator()
-    tracker   = SuggestionTracker(storage, fetcher)
-
-    try:
-        analyst = AIAnalyst(
-            model=claude_cfg.get("model", "claude-sonnet-4-6"),
-            max_tokens=int(claude_cfg.get("max_tokens", 1024)),
-        )
-    except ValueError as e:
-        logger.error(f"AIAnalyst init failed: {e}")
-        analyst = None
-
-    watchlist   = load_watchlist()
-    max_stocks  = int(limits.get("max_stocks_per_day", 20))
-    max_calls   = int(limits.get("max_claude_calls_per_day", 50))
-    news_limit  = int(limits.get("news_per_stock", 10))
-    conf_thresh = float(claude_cfg.get("confidence_warning_threshold", 0.5))
-
-    claude_calls  = 0
-    stock_results = []
-
-    for entry in watchlist[:max_stocks]:
-        ticker = entry["ticker"]
-        logger.info(f"--- {ticker} ---")
-
-        df = fetcher.fetch_price_history(ticker, days=int(limits.get("history_days", 730)))
-        if df is None:
-            storage.log_data_warning(ticker, "price data unavailable")
-            stock_results.append(_stock_error(ticker, "price data unavailable"))
-            continue
-
-        df, price_warns = cleaner.validate_price_data(ticker, df)
-        for w in price_warns:
-            storage.log_data_warning(ticker, w)
-        storage.save_price_history(ticker, df)
-
-        news, _ = cleaner.validate_news(ticker, fetcher.fetch_news(ticker, limit=news_limit))
-        if news:
-            storage.save_news(ticker, news)
-
-        current_price = fetcher.fetch_current_price(ticker)
-        indicators    = indicator.compute(df)
-        if indicators is None:
-            stock_results.append(_stock_error(ticker, "insufficient data"))
-            continue
-
-        signals    = evaluate_signals(indicators)
-        suggestion = None
-        if analyst and claude_calls < max_calls:
-            suggestion, raw = analyst.analyze(ticker, indicators, signals, news)
-            claude_calls += 1
-            if suggestion:
-                storage.save_suggestion(ticker, suggestion, current_price, raw)
-
-        low_conf = suggestion and suggestion.get("confidence", 1.0) < conf_thresh
-        consec   = (suggestion and suggestion.get("recommendation") == "BUY" and
-                    tracker.check_consecutive_buys(ticker, storage))
-
-        def fmt(v):
-            return f"{v:.2f}" if isinstance(v, float) else str(v) if v is not None else "N/A"
-
-        stock_results.append({
-            "ticker": ticker, "price": current_price,
-            "recommendation": (suggestion or {}).get("recommendation", "N/A"),
-            "confidence":     (suggestion or {}).get("confidence"),
-            "signal_score":   signals.score,
-            "sentiment_score":(suggestion or {}).get("sentiment_score"),
-            "feasibility":    (suggestion or {}).get("feasibility", ""),
-            "key_levels":     (suggestion or {}).get("key_levels", {}),
-            "risk_factors":   (suggestion or {}).get("risk_factors", []),
-            "key_events":     (suggestion or {}).get("key_events", []),
-            "bullish_signals":signals.bullish, "bearish_signals": signals.bearish,
-            "sma20": fmt(indicators.get("sma20")), "sma50": fmt(indicators.get("sma50")),
-            "sma200":fmt(indicators.get("sma200")), "macd": fmt(indicators.get("macd")),
-            "macd_signal":fmt(indicators.get("macd_signal")), "rsi14":fmt(indicators.get("rsi14")),
-            "bb_upper":fmt(indicators.get("bb_upper")), "bb_lower":fmt(indicators.get("bb_lower")),
-            "atr14":fmt(indicators.get("atr14")),
-            "low_confidence": low_conf, "consecutive_buy": consec,
-            "data_warning": bool(price_warns), "no_news": not news,
-        })
-
-    tracker.evaluate_pending()
-    accuracy = storage.get_accuracy_report()
-
-    email_cfg = config.get("email", {})
-    renderer  = ReportRenderer()
-    mailer    = Mailer(email_cfg)
-
-    html_en, html_zh = renderer.render_both(stock_results, accuracy_report=accuracy)
-    mailer.send(html_en, subject=f"[Stock Agent] Daily Report {date.today()}")
-    mailer.send(html_zh, subject=f"[选股助手] 每日报告 {date.today()}")
-
-    logger.info(f"=== Stock pipeline complete — {len(stock_results)} stocks ===")
-    return stock_results
-
-
-def _stock_error(ticker: str, reason: str) -> dict:
-    return {
-        "ticker": ticker, "price": None, "recommendation": "N/A",
-        "confidence": None, "signal_score": None, "sentiment_score": None,
-        "feasibility": reason, "key_levels": {}, "risk_factors": [], "key_events": [],
-        "bullish_signals": [], "bearish_signals": [],
-        "sma20":"N/A","sma50":"N/A","sma200":"N/A","macd":"N/A","macd_signal":"N/A",
-        "rsi14":"N/A","bb_upper":"N/A","bb_lower":"N/A","atr14":"N/A",
-        "low_confidence":False,"consecutive_buy":False,"data_warning":True,"no_news":True,
-    }
-
-
-# ── Portfolio pipeline ─────────────────────────────────────────────────────────
+# ── Portfolio + Factor pipeline ────────────────────────────────────────────────
 
 def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
     logger = logging.getLogger("portfolio")
@@ -190,8 +59,9 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
 
     thresholds = load_yaml("config/thresholds.yaml")
     vol_cfg    = load_yaml("config/volatility.yaml")
+    fixed_days = vol_cfg.get("windows", {}).get("fixed", 252)
 
-    from data.price_loader   import load_fx_rates
+    from data.price_loader   import load_fx_rates, load_prices
     from data.fetch_holdings import fetch_all_holdings
     from data                import cache
 
@@ -208,12 +78,9 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
             logger.error("No holdings and no cache — skipping portfolio pipeline")
             return
 
-    from data.price_loader import load_prices
-    # Bonds don't have yfinance price history — only pass equity tickers
     equity_tickers = list({h["ticker"] for h in holdings if h.get("asset_class", "equity") == "equity"})
-    tickers    = equity_tickers + ["SPY"]
-    price_data = load_prices(tickers, days=vol_cfg.get("windows", {}).get("fixed", 252))
-    spy_pd     = price_data.pop("SPY", None)
+    price_data     = load_prices(equity_tickers + ["SPY"], days=fixed_days)
+    spy_pd         = price_data.pop("SPY", None)
 
     from risk.risk_engine import compute_all
     metrics = compute_all(holdings, price_data, spy_pd, vcfg=vol_cfg, thresholds=thresholds)
@@ -226,6 +93,49 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
         logger.info("alert_check — skipping full report")
         return
 
+    # ── Fama-French 5-factor analysis ─────────────────────────────────────────
+    from risk.optimizer        import fetch_ff5
+    from strategy.factor_model import run_factor_regression, portfolio_factor_exposure
+
+    ff5          = fetch_ff5()
+    stock_factors: list[dict] = []
+    port_exposure             = None
+
+    if ff5 is not None:
+        # Portfolio factor exposure (weighted average betas of current holdings)
+        port_exposure = portfolio_factor_exposure(holdings, price_data, ff5)
+
+        if run_mode == "full":
+            # Watchlist factor ranking — load prices for tickers not in holdings
+            watchlist_equity = [
+                w for w in load_watchlist()
+                if w.get("asset_class", "equity") == "equity"
+            ]
+            known_pd = {**price_data, "SPY": spy_pd} if spy_pd else dict(price_data)
+            extra_tk = [w["ticker"] for w in watchlist_equity if w["ticker"] not in known_pd]
+            factor_pd = {**known_pd, **(load_prices(extra_tk, days=fixed_days) if extra_tk else {})}
+
+            for entry in watchlist_equity:
+                tk     = entry["ticker"]
+                pd_obj = factor_pd.get(tk)
+                if pd_obj and pd_obj.returns is not None:
+                    reg = run_factor_regression(tk, pd_obj.returns, ff5)
+                    if reg:
+                        reg["price"] = (float(pd_obj.closes.iloc[-1])
+                                        if pd_obj.closes is not None and not pd_obj.closes.empty
+                                        else None)
+                        stock_factors.append(reg)
+
+            stock_factors.sort(
+                key=lambda x: x.get("ir") if x.get("ir") == x.get("ir") else float("-inf"),
+                reverse=True,
+            )
+            logger.info(f"Factor ranking: {len(stock_factors)} stocks | "
+                        f"top IR: {stock_factors[0]['ticker'] if stock_factors else '—'}")
+    else:
+        logger.warning("FF5 data unavailable — factor analysis skipped")
+
+    # ── Stress, optimizer, Monte Carlo ────────────────────────────────────────
     from risk.stress        import run_all as run_stress
     from risk.optimizer     import compute_frontier, rebalancing_suggestions, marginal_impact
     from risk.mc_portfolio  import run_mc_portfolio
@@ -234,7 +144,7 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
     from notify             import mailer
 
     stress      = run_stress(holdings, price_data, metrics["nav_eur"], vol_cfg=vol_cfg)
-    snapshot    = {"holdings": holdings, "metrics": {k:v for k,v in metrics.items() if k != "alerts"}}
+    snapshot    = {"holdings": holdings, "metrics": {k: v for k, v in metrics.items() if k != "alerts"}}
     cache.save_snapshot(snapshot)
     last_week   = cache.load_week_ago_snapshot()
 
@@ -284,13 +194,12 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
         )
 
     # ── Diversification candidates (bonds + gold from watchlist) ──────────────
-    watchlist_all  = load_watchlist()
-    wl_map         = {w["ticker"]: w for w in watchlist_all}
-    cand_entries   = [w for w in watchlist_all if w.get("asset_class") in ("bond", "gold")]
-    div_candidates = []
+    watchlist_all = load_watchlist()
+    cand_entries  = [w for w in watchlist_all if w.get("asset_class") in ("bond", "gold")]
+    div_candidates: list[dict] = []
     if cand_entries:
         new_tickers   = [w["ticker"] for w in cand_entries if w["ticker"] not in price_data]
-        cand_pd_extra = load_prices(new_tickers, days=vol_cfg.get("windows", {}).get("fixed", 252)) if new_tickers else {}
+        cand_pd_extra = load_prices(new_tickers, days=fixed_days) if new_tickers else {}
         for entry in cand_entries:
             tk     = entry["ticker"]
             pd_obj = cand_pd_extra.get(tk) or price_data.get(tk)
@@ -308,6 +217,8 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
         frontier=frontier, suggestions=suggestions,
         has_chart_en=bool(chart_en), has_chart_zh=bool(chart_zh),
         div_candidates=div_candidates, fx_rates=fx_rates,
+        stock_factors=stock_factors if stock_factors else None,
+        port_exposure=port_exposure,
     )
     mailer.send_report(html_en, html_zh, rag=metrics["overall_rag"],
                        chart_en=chart_en, chart_zh=chart_zh)
@@ -324,11 +235,11 @@ def run_backtest_pipeline(config: dict):
     thresholds = load_yaml("config/thresholds.yaml")
     rf         = thresholds.get("risk_free_rate", 0.035)
 
-    watchlist     = load_watchlist()
+    watchlist      = load_watchlist()
     equity_tickers = [w["ticker"] for w in watchlist if w.get("asset_class", "equity") == "equity"]
 
-    from data.spy_universe       import load_universe
-    from backtest.walk_forward   import run_walk_forward, print_summary
+    from data.spy_universe     import load_universe
+    from backtest.walk_forward import run_walk_forward, print_summary
 
     max_sp500 = int(config.get("backtest", {}).get("max_sp500", 100))
     days      = int(config.get("backtest", {}).get("history_days", 1260))
@@ -354,14 +265,11 @@ def run_backtest_pipeline(config: dict):
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    cfg      = load_config()
-    log_cfg  = cfg.get("logging", {})
+    cfg     = load_config()
+    log_cfg = cfg.get("logging", {})
     setup_logging(log_cfg.get("level", "INFO"), log_cfg.get("file", "logs/agent.log"))
 
     mode = os.environ.get("RUN_MODE", "full")
-
-    if mode in ("stock", "full"):
-        run_stock_pipeline(cfg)
 
     if mode in ("portfolio", "full", "alert_check"):
         run_portfolio_pipeline(run_mode=mode, config=cfg)

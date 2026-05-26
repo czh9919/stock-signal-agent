@@ -23,9 +23,6 @@ scheduler:
   timezone: "America/New_York"
 
 limits:
-  max_stocks_per_day: 20
-  max_claude_calls_per_day: 50
-  news_per_stock: 10
   history_days: 730
   backtest_history_days: 730
 
@@ -41,9 +38,6 @@ monte_carlo:
   horizon: 21
   model: "hawkes"
 
-claude:
-  model: "claude-sonnet-4-6"
-  max_tokens: 1024
-  confidence_warning_threshold: 0.5
-  consecutive_buy_warning: 3
-  alert_confidence_threshold: 0.75   # morning/premarket: only email if confidence >= this
+factor_model:
+  window_days: 252        # OLS regression window; falls back to available days if fewer
+  min_window_days: 63     # skip ticker if aligned days < this

@@ -50,20 +50,25 @@ def build_report(metrics: dict, stress: dict, holdings: list[dict],
                  has_chart_en: bool = False,
                  has_chart_zh: bool = False,
                  div_candidates: Optional[list] = None,
-                 fx_rates: Optional[dict] = None) -> tuple[str, str]:
+                 fx_rates: Optional[dict] = None,
+                 stock_factors: Optional[list] = None,
+                 port_exposure: Optional[dict] = None) -> tuple[str, str]:
     """Returns (html_en, html_zh)."""
     en = _build(metrics, stress, holdings, price_data, last_week, "en",
                 frontier, suggestions, has_chart=has_chart_en,
-                div_candidates=div_candidates, fx_rates=fx_rates)
+                div_candidates=div_candidates, fx_rates=fx_rates,
+                stock_factors=stock_factors, port_exposure=port_exposure)
     zh = _build(metrics, stress, holdings, price_data, last_week, "zh",
                 frontier, suggestions, has_chart=has_chart_zh,
-                div_candidates=div_candidates, fx_rates=fx_rates)
+                div_candidates=div_candidates, fx_rates=fx_rates,
+                stock_factors=stock_factors, port_exposure=port_exposure)
     return en, zh
 
 
 def _build(metrics, stress, holdings, price_data, last_week, lang,
            frontier=None, suggestions=None, has_chart=False,
-           div_candidates=None, fx_rates=None):
+           div_candidates=None, fx_rates=None,
+           stock_factors=None, port_exposure=None):
     t        = _T[lang]
     rag      = metrics.get("overall_rag", "GREY")
     rag_col  = _RAG_COLOR[rag]
@@ -254,6 +259,83 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
       <th style="padding:6px 8px;text-align:left;font-weight:600;color:#666;font-size:13px">{t['metric']}</th>
       <th style="padding:6px 8px;text-align:left;font-weight:600;color:#666;font-size:13px">{t['value']}</th>
     </tr>{risk_html}
+  </table>
+</div>""")
+
+    # ── Portfolio factor exposure ──────────────────────────────────────────────
+    if port_exposure:
+        pe = port_exposure
+        sections.append(f"""
+<div style="padding:0 20px 16px">
+  <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
+    {t['port_exposure']}
+  </h2>
+  <p style="font-size:11px;color:#aaa;margin:0 0 8px">{t['port_exposure_note']}</p>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#f8f9ff">
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">α (ann.)</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β MKT</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β SMB</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β HML</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β RMW</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β CMA</th>
+    </tr>
+    <tr>
+      <td style="padding:6px 8px;font-size:13px;font-weight:600;color:{'#27ae60' if pe.get('alpha_ann',0)>=0 else '#c0392b'}">{_pct(pe.get('alpha_ann'))}</td>
+      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_mkt'))}</td>
+      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_smb'))}</td>
+      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_hml'))}</td>
+      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_rmw'))}</td>
+      <td style="padding:6px 8px;font-size:13px">{_f(pe.get('beta_cma'))}</td>
+    </tr>
+  </table>
+</div>""")
+
+    # ── Stock factor rankings ──────────────────────────────────────────────────
+    if stock_factors:
+        _SIG_COL = {"BUY": "#27ae60", "SELL": "#c0392b", "HOLD": "#95a5a6"}
+        _SIG_ZH  = {"BUY": "买入", "SELL": "卖出", "HOLD": "持有"}
+        sf_rows  = ""
+        for s in stock_factors:
+            sig     = s.get("signal", "HOLD")
+            sig_col = _SIG_COL.get(sig, "#888")
+            sig_lbl = _SIG_ZH.get(sig, sig) if lang == "zh" else sig
+            price   = f"${s['price']:.2f}" if s.get("price") else "—"
+            alpha   = _pct(s.get("alpha_ann"))
+            t_stat  = _f(s.get("t_alpha"))
+            ir      = _f(s.get("ir"), decimals=2)
+            r2      = _f(s.get("r_squared"), decimals=2)
+            bmkt    = _f(s.get("beta_mkt"))
+            sf_rows += (
+                f"<tr>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'><b>{s['ticker']}</b></td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{price}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"font-weight:700;color:{sig_col}'>{sig_lbl}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{alpha}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{bmkt}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{t_stat}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;font-weight:600'>{ir}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#888'>{r2}</td>"
+                f"</tr>"
+            )
+        sections.append(f"""
+<div style="padding:0 20px 16px">
+  <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
+    {t['factor_rankings']}
+  </h2>
+  <p style="font-size:11px;color:#aaa;margin:0 0 8px">{t['factor_rankings_note']}</p>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#f8f9ff">
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['ticker']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['price']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['signal']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">α (ann.)</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">β MKT</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">t(α)</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">IR</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">R²</th>
+    </tr>{sf_rows}
   </table>
 </div>""")
 
@@ -664,6 +746,12 @@ _T = {
         "dc_add":         "Consider",
         "dc_watch":       "Monitor",
         "dc_skip":        "Low benefit",
+        "port_exposure":       "Portfolio Factor Exposures (FF5)",
+        "port_exposure_note":  "Market-value-weighted average of Fama-French 5-factor betas across equity holdings.",
+        "factor_rankings":     "Stock Factor Rankings (FF5 — sorted by IR)",
+        "factor_rankings_note":"Sorted by Information Ratio (α / σ_residuals × √252). Signal = BUY if t(α) > 1.5, SELL if < −1.5.",
+        "price":               "Price",
+        "signal":              "Signal",
         "footer_note":    "For informational purposes only. Not investment advice.",
         "alert_labels": {
             "var_95":    "VaR (95%) > 5% NAV",
@@ -739,6 +827,12 @@ _T = {
         "dc_add":         "可考虑",
         "dc_watch":       "持续观察",
         "dc_skip":        "效益有限",
+        "port_exposure":       "组合因子暴露（FF5）",
+        "port_exposure_note":  "按市值加权的Fama-French五因子Beta，反映当前股票持仓的整体风格偏向。",
+        "factor_rankings":     "个股因子排名（FF5 — 按IR排序）",
+        "factor_rankings_note":"按信息比率（α / σ残差 × √252）降序排列。信号：t(α) > 1.5 = 买入，< −1.5 = 卖出。",
+        "price":               "价格",
+        "signal":              "信号",
         "footer_note":    "本报告仅供参考，不构成投资建议。",
         "alert_labels": {
             "var_95":    "VaR(95%) > 组合市值5%",
