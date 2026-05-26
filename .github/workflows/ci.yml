@@ -55,20 +55,20 @@ jobs:
           }
           suggestions = rebalancing_suggestions(
               [{"ticker": "AAPL", "weight": 0.6, "asset_class": "equity",
-                "unrealised_pnl_gbp": 500},
+                "unrealised_pnl_eur": 500},
                {"ticker": "MSFT", "weight": 0.4, "asset_class": "equity",
-                "unrealised_pnl_gbp": 200}],
-              frontier, nav_gbp=10000,
+                "unrealised_pnl_eur": 200}],
+              frontier, nav_eur=10000,
           )
           chart = risk_return_png(frontier, "en")
           assert len(chart) > 1000, "chart PNG unexpectedly small"
 
-          metrics = {"overall_rag": "GREEN", "nav_gbp": 10000,
-                     "total_pnl_gbp": 500, "var_95_ewma": 0.03,
+          metrics = {"overall_rag": "GREEN", "nav_eur": 10000,
+                     "total_pnl_eur": 500, "var_95_ewma": 0.03,
                      "sharpe": 0.9, "alerts": {}}
           holdings = [{"ticker": "AAPL", "platform": "IBKR", "weight": 0.6,
-                       "market_value_gbp": 6000, "cost_basis_gbp": 5000,
-                       "unrealised_pnl_gbp": 1000, "asset_class": "equity"}]
+                       "market_value_eur": 6000, "cost_basis_eur": 5000,
+                       "unrealised_pnl_eur": 1000, "asset_class": "equity"}]
           html_en, html_zh = build_report(
               metrics, {}, holdings, {},
               frontier=frontier, suggestions=suggestions,
