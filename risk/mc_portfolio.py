@@ -47,7 +47,7 @@ _DEFAULTS: dict = {
     "n_paths":  5000,
     "horizon":  21,
     "rf":       0.035,
-    "model":    "garch",
+    "model":    "hawkes",
 }
 
 

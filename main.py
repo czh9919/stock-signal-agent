@@ -251,7 +251,7 @@ def run_portfolio_pipeline(run_mode: str = "full"):
         stress["monte_carlo"] = {
             "paths":            tail["n_paths"],
             "horizon_days":     tail["horizon_days"],
-            "model":            "GARCH-CC",
+            "model":            "Hawkes-GARCH",
             "var_95":           tail["var_95_pct"],
             "eur_var_95":       tail["var_95_eur"],
             "var_99":           tail["var_99_pct"],
