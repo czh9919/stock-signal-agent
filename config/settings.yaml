@@ -36,6 +36,11 @@ logging:
   level: "INFO"
   file: "logs/agent.log"
 
+monte_carlo:
+  n_paths: 50000
+  horizon: 21
+  model: "hawkes"
+
 claude:
   model: "claude-sonnet-4-6"
   max_tokens: 1024

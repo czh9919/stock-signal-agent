@@ -184,7 +184,7 @@ def _stock_error(ticker: str, reason: str) -> dict:
 
 # ── Portfolio pipeline ─────────────────────────────────────────────────────────
 
-def run_portfolio_pipeline(run_mode: str = "full"):
+def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
     logger = logging.getLogger("portfolio")
     logger.info(f"=== Portfolio Risk System — run_mode={run_mode} ===")
 
@@ -244,7 +244,13 @@ def run_portfolio_pipeline(run_mode: str = "full"):
     chart_en    = risk_return_png(frontier, "en")
     chart_zh    = risk_return_png(frontier, "zh")
 
-    mc_result = run_mc_portfolio(holdings, price_data, rf=rf)
+    mc_cfg    = (config or {}).get("monte_carlo", {})
+    mc_result = run_mc_portfolio(
+        holdings, price_data, rf=rf,
+        n_paths=int(mc_cfg.get("n_paths", 5000)),
+        horizon=int(mc_cfg.get("horizon", 21)),
+        config={"model": mc_cfg.get("model", "hawkes")},
+    )
     if mc_result:
         tail = mc_result["tail"]
         dec  = mc_result["decision"]
@@ -358,7 +364,7 @@ if __name__ == "__main__":
         run_stock_pipeline(cfg)
 
     if mode in ("portfolio", "full", "alert_check"):
-        run_portfolio_pipeline(run_mode=mode)
+        run_portfolio_pipeline(run_mode=mode, config=cfg)
 
     if mode == "backtest":
         run_backtest_pipeline(cfg)
