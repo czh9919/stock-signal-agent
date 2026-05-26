@@ -17,4 +17,4 @@ monte_carlo:
   paths:        10000
   horizon_days:    30
 
-risk_free_rate: 0.045   # 4.5% p.a. for Sharpe
+risk_free_rate: 0.035   # 3.5% p.a. ECB rate (Ireland/Eurozone)

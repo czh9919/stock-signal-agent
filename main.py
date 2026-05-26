@@ -217,7 +217,7 @@ def run_portfolio_pipeline(run_mode: str = "full"):
 
     from risk.risk_engine import compute_all
     metrics = compute_all(holdings, price_data, spy_pd, vcfg=vol_cfg, thresholds=thresholds)
-    logger.info(f"NAV: {metrics['nav_gbp']:,.0f} GBP | VaR(95%): {metrics['var_95_ewma']*100:.1f}% | RAG: {metrics['overall_rag']}")
+    logger.info(f"NAV: €{metrics['nav_eur']:,.0f} | VaR(95%): {metrics['var_95_ewma']*100:.1f}% | RAG: {metrics['overall_rag']}")
 
     from alert import check_and_alert
     check_and_alert(metrics, thresholds)
@@ -232,14 +232,14 @@ def run_portfolio_pipeline(run_mode: str = "full"):
     from notify.chart      import risk_return_png
     from notify            import mailer
 
-    stress      = run_stress(holdings, price_data, metrics["nav_gbp"], vol_cfg=vol_cfg)
+    stress      = run_stress(holdings, price_data, metrics["nav_eur"], vol_cfg=vol_cfg)
     snapshot    = {"holdings": holdings, "metrics": {k:v for k,v in metrics.items() if k != "alerts"}}
     cache.save_snapshot(snapshot)
     last_week   = cache.load_week_ago_snapshot()
 
     rf          = thresholds.get("risk_free_rate", 0.045)
     frontier    = compute_frontier(price_data, holdings, rf=rf)
-    suggestions = rebalancing_suggestions(holdings, frontier, nav_gbp=metrics["nav_gbp"])
+    suggestions = rebalancing_suggestions(holdings, frontier, nav_eur=metrics["nav_eur"])
     chart_en    = risk_return_png(frontier, "en")
     chart_zh    = risk_return_png(frontier, "zh")
 

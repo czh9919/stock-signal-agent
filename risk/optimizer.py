@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _stats(w: np.ndarray, mu: np.ndarray, cov: np.ndarray,
-           rf: float = 0.045) -> tuple[float, float, float]:
+           rf: float = 0.035) -> tuple[float, float, float]:
     ret = float(w @ mu)
     vol = float(np.sqrt(max(w @ cov @ w, 0.0)))
     sharpe = (ret - rf) / vol if vol > 1e-9 else -99.0
@@ -22,7 +22,7 @@ def _stats(w: np.ndarray, mu: np.ndarray, cov: np.ndarray,
 
 
 def _max_sharpe(mu: np.ndarray, cov: np.ndarray,
-                rf: float = 0.045,
+                rf: float = 0.035,
                 w_bounds: tuple = (0.005, 0.30)) -> Optional[np.ndarray]:
     n = len(mu)
     w0 = np.ones(n) / n
@@ -41,7 +41,7 @@ def _max_sharpe(mu: np.ndarray, cov: np.ndarray,
 
 
 def compute_frontier(price_data: dict, holdings: list[dict],
-                     rf: float = 0.045, n_mc: int = 1200) -> dict:
+                     rf: float = 0.035, n_mc: int = 1200) -> dict:
     """
     Build risk-return frontier data for visualisation + optimisation.
     Only equity holdings with ok/reduced price history are used.
@@ -118,13 +118,13 @@ def compute_frontier(price_data: dict, holdings: list[dict],
 
 
 def rebalancing_suggestions(holdings: list[dict], frontier: dict,
-                             nav_gbp: float) -> list[dict]:
+                             nav_eur: float) -> list[dict]:
     """
     Compare current weights to max-Sharpe optimal weights and generate
     3-tier rebalancing suggestions.
 
-    Tier 1 — Act:   |delta| >= 5%, no UK CGT obstacle
-    Tier 2 — Watch: 2% <= |delta| < 5%, or reducing a winner (CGT applies)
+    Tier 1 — Act:   |delta| >= 5%, no Irish CGT obstacle
+    Tier 2 — Watch: 2% <= |delta| < 5%, or reducing a winner (Irish CGT 33% applies)
     Tier 3 — Hold:  |delta| < 2% (trade cost likely exceeds benefit)
     """
     if not frontier or not frontier.get("optimal"):
@@ -141,8 +141,8 @@ def rebalancing_suggestions(holdings: list[dict], frontier: dict,
         cw    = h.get("weight", 0.0)
         delta = ow - cw
         absd  = abs(delta)
-        # UK CGT flag: reducing a position with unrealised gains
-        cgt_flag = (delta < 0) and (h.get("unrealised_pnl_gbp", 0) > 0)
+        # Irish CGT flag (33%): reducing a position with unrealised gains
+        cgt_flag = (delta < 0) and (h.get("unrealised_pnl_eur", 0) > 0)
 
         if absd < 0.02:
             tier, action, action_zh = 3, "Hold",  "维持"
@@ -156,7 +156,7 @@ def rebalancing_suggestions(holdings: list[dict], frontier: dict,
             "cur_weight":  cw,
             "opt_weight":  ow,
             "delta":       delta,
-            "gbp_change":  absd * nav_gbp,
+            "eur_change":  absd * nav_eur,
             "tier":        tier,
             "action":      action,
             "action_zh":   action_zh,

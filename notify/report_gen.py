@@ -22,11 +22,11 @@ def _pct(v, decimals=1):
         return "N/A"
     return f"{v*100:.{decimals}f}%"
 
-def _gbp(v):
+def _eur(v):
     if v is None or v != v:
         return "N/A"
     sign = "-" if v < 0 else ""
-    return f"{sign}£{abs(v):,.0f}"
+    return f"{sign}€{abs(v):,.0f}"
 
 def _f(v, decimals=2):
     if v is None or v != v:
@@ -95,14 +95,14 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
 </div>""")
 
     # ── Snapshot cards ─────────────────────────────────────────────────────────
-    nav      = metrics.get("nav_gbp", 0)
-    pnl      = metrics.get("total_pnl_gbp", 0)
+    nav      = metrics.get("nav_eur", 0)
+    pnl      = metrics.get("total_pnl_eur", 0)
     var95    = metrics.get("var_95_ewma")
     sharpe   = metrics.get("sharpe")
     pnl_col  = "#27ae60" if (pnl or 0) >= 0 else "#c0392b"
 
     bond_holdings  = [h for h in holdings if h.get("asset_class") == "bond"]
-    bond_nav       = sum(h["market_value_gbp"] for h in bond_holdings)
+    bond_nav       = sum(h["market_value_eur"] for h in bond_holdings)
     bond_pct       = bond_nav / nav if nav else 0.0
     bond_card      = ""
     if bond_holdings:
@@ -110,7 +110,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
     <div style="{_CARD}">
       <div style="font-size:11px;color:#888">{t['bond_exposure']}</div>
       <div style="font-size:18px;font-weight:700;color:#2c3e50">{_pct(bond_pct)}</div>
-      <div style="font-size:11px;color:#aaa">{_gbp(bond_nav)}</div>
+      <div style="font-size:11px;color:#aaa">{_eur(bond_nav)}</div>
     </div>"""
 
     sections.append(f"""
@@ -121,11 +121,11 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
   <div>
     <div style="{_CARD}">
       <div style="font-size:11px;color:#888">{t['nav']}</div>
-      <div style="font-size:18px;font-weight:700;color:#1a1a2e">{_gbp(nav)}</div>
+      <div style="font-size:18px;font-weight:700;color:#1a1a2e">{_eur(nav)}</div>
     </div>
     <div style="{_CARD}">
       <div style="font-size:11px;color:#888">{t['pnl']}</div>
-      <div style="font-size:18px;font-weight:700;color:{pnl_col}">{_gbp(pnl)}</div>
+      <div style="font-size:18px;font-weight:700;color:{pnl_col}">{_eur(pnl)}</div>
     </div>
     <div style="{_CARD}">
       <div style="font-size:11px;color:#888">{t['var95']}</div>
@@ -159,7 +159,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
                 f"<tr>"
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0'>"
                 f"<b>{s['name']}</b><br><span style='color:#888;font-size:11px'>{s['name_zh']}</span></td>"
-                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#c0392b'>{_gbp(s['gbp_loss'])}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#c0392b'>{_eur(s['eur_loss'])}</td>"
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#c0392b'>{_pct(s['pct_loss'])}</td>"
                 f"</tr>"
             )
@@ -171,7 +171,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
   <table style="width:100%;border-collapse:collapse;font-size:13px">
     <tr style="background:#f8f9ff">
       <th style="padding:6px 8px;text-align:left;font-weight:600;color:#666">{t['scenario']}</th>
-      <th style="padding:6px 8px;text-align:left;font-weight:600;color:#666">{t['gbp_loss']}</th>
+      <th style="padding:6px 8px;text-align:left;font-weight:600;color:#666">{t['eur_loss']}</th>
       <th style="padding:6px 8px;text-align:left;font-weight:600;color:#666">{t['pct_loss']}</th>
     </tr>{rows}
   </table>
@@ -279,7 +279,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
                 f"color:{dir_col};font-weight:600'>{direction} {_pct(abs(s['delta']))}</td>"
                 f"<td style='padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>"
-                f"{_gbp(s['gbp_change'])}</td>"
+                f"{_eur(s['eur_change'])}</td>"
                 f"</tr>"
             )
         sections.append(f"""
@@ -295,17 +295,17 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
       <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['cur_wt']}</th>
       <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['opt_wt']}</th>
       <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['change']}</th>
-      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['gbp_chg']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['eur_chg']}</th>
     </tr>{sug_rows}
   </table>
 </div>""")
 
     # ── Top 10 equity positions ────────────────────────────────────────────────
     equity_h = [h for h in holdings if h.get("asset_class", "equity") == "equity"]
-    top10    = sorted(equity_h, key=lambda h: h["market_value_gbp"], reverse=True)[:10]
+    top10    = sorted(equity_h, key=lambda h: h["market_value_eur"], reverse=True)[:10]
     pos_rows = ""
     for h in top10:
-        pnl_pct = h["unrealised_pnl_gbp"] / h["cost_basis_gbp"] if h.get("cost_basis_gbp") else 0
+        pnl_pct = h["unrealised_pnl_eur"] / h["cost_basis_eur"] if h.get("cost_basis_eur") else 0
         c       = "#27ae60" if pnl_pct >= 0 else "#c0392b"
         pos_rows += (
             f"<tr>"
@@ -334,7 +334,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
     # ── Bond holdings ──────────────────────────────────────────────────────────
     if bond_holdings:
         bond_rows = ""
-        for h in sorted(bond_holdings, key=lambda h: h["market_value_gbp"], reverse=True):
+        for h in sorted(bond_holdings, key=lambda h: h["market_value_eur"], reverse=True):
             desc    = h.get("description") or h["ticker"]
             mat     = h.get("maturity", "")
             cpn_raw = h.get("coupon", "")
@@ -343,7 +343,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
             except (ValueError, TypeError):
                 cpn_str = str(cpn_raw)
             detail  = " · ".join(filter(None, [cpn_str, mat]))
-            pnl_pct = h["unrealised_pnl_gbp"] / h["cost_basis_gbp"] if h.get("cost_basis_gbp") else 0
+            pnl_pct = h["unrealised_pnl_eur"] / h["cost_basis_eur"] if h.get("cost_basis_eur") else 0
             c       = "#27ae60" if pnl_pct >= 0 else "#c0392b"
             detail_html = (f"<br><span style='color:#888;font-size:11px'>{detail}</span>"
                            if detail else "")
@@ -354,7 +354,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
                 f"</td>"
                 f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555'>{h['platform']}</td>"
                 f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{_pct(h['weight'])}</td>"
-                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{_gbp(h['market_value_gbp'])}</td>"
+                f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>{_eur(h['market_value_eur'])}</td>"
                 f"<td style='padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:{c}'>{_pct(pnl_pct)}</td>"
                 f"</tr>"
             )
@@ -386,7 +386,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
     {mc.get('paths',0):,} {t['mc_paths']} · {mc.get('horizon_days',30)}{t['mc_days']}
   </p>
   <p style="font-size:13px;margin:4px 0">
-    VaR(95%) <b style="color:#c0392b">{_pct(mc.get('var_95'))}</b> ({_gbp(mc.get('gbp_var_95'))})&nbsp;&nbsp;
+    VaR(95%) <b style="color:#c0392b">{_pct(mc.get('var_95'))}</b> ({_eur(mc.get('eur_var_95'))})&nbsp;&nbsp;
     CVaR <b style="color:#c0392b">{_pct(mc.get('cvar_95'))}</b>&nbsp;&nbsp;
     P(+) <b style="color:#27ae60">{_pct(mc.get('p_positive'))}</b>
   </p>
@@ -453,7 +453,7 @@ _T = {
         "sharpe":         "Sharpe Ratio",
         "stress_top3":    "Stress Tests — Top 3 Worst Scenarios",
         "scenario":       "Scenario",
-        "gbp_loss":       "Est. Loss",
+        "eur_loss":       "Est. Loss",
         "pct_loss":       "% Loss",
         "rr_chart":       "Risk–Return Chart",
         "rr_chart_note":  "Orange circle = current portfolio · Green diamond = max-Sharpe optimal · Dots = individual positions",
@@ -461,16 +461,16 @@ _T = {
         "metric":         "Metric",
         "value":          "Value",
         "rebalance":      "Portfolio Rebalancing Suggestions",
-        "rebalance_note": "Act: |Δ|≥5% · Watch: 2–5% or CGT applies · Hold: |Δ|<2%",
+        "rebalance_note": "Act: |Δ|≥5% · Watch: 2–5% or Irish CGT (33%) applies · Hold: |Δ|<2%",
         "action":         "Action",
         "cur_wt":         "Current",
         "opt_wt":         "Optimal",
         "change":         "Direction",
-        "gbp_chg":        "Est. GBP",
+        "eur_chg":        "Est. EUR",
         "tier_act":       "Act",
         "tier_watch":     "Watch",
         "tier_hold":      "Hold",
-        "cgt_flag":       "⚑ CGT",
+        "cgt_flag":       "⚑ CGT 33%",
         "top10":          "Top 10 Positions",
         "ticker":         "Ticker",
         "platform":       "Platform",
@@ -511,7 +511,7 @@ _T = {
         "sharpe":         "夏普比率",
         "stress_top3":    "压力测试 — 最差三个情景",
         "scenario":       "情景",
-        "gbp_loss":       "预估损失",
+        "eur_loss":       "预估损失",
         "pct_loss":       "损失比例",
         "rr_chart":       "风险–收益图",
         "rr_chart_note":  "橙圈=当前组合 · 绿菱=最优组合（最大夏普） · 蓝点=单个持仓",
@@ -519,16 +519,16 @@ _T = {
         "metric":         "指标",
         "value":          "数值",
         "rebalance":      "组合再平衡建议",
-        "rebalance_note": "立即行动：|Δ|≥5% · 观察：2–5%或涉及资本利得税 · 维持：|Δ|<2%",
+        "rebalance_note": "立即行动：|Δ|≥5% · 观察：2–5%或涉及爱尔兰CGT(33%) · 维持：|Δ|<2%",
         "action":         "行动",
         "cur_wt":         "当前权重",
         "opt_wt":         "最优权重",
         "change":         "方向",
-        "gbp_chg":        "预估金额",
+        "eur_chg":        "预估金额(€)",
         "tier_act":       "立即行动",
         "tier_watch":     "观察",
         "tier_hold":      "维持",
-        "cgt_flag":       "⚑ CGT",
+        "cgt_flag":       "⚑ CGT 33%",
         "top10":          "前十大持仓",
         "ticker":         "代码",
         "platform":       "平台",

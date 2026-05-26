@@ -19,9 +19,9 @@ import yfinance as yf
 logger = logging.getLogger(__name__)
 
 FX_TICKERS = {
-    "USDGBP": "GBPUSD=X",   # invert
-    "EURGBP": "GBPEUR=X",   # invert
-    "AUDGBP": "GBPAUD=X",   # invert
+    "USDEUR": "EURUSD=X",   # invert
+    "GBPEUR": "EURGBP=X",   # invert
+    "AUDEUR": "EURAUD=X",   # invert
 }
 
 @dataclass
@@ -79,14 +79,14 @@ def _fetch_one(ticker: str, start: datetime, end: datetime, target_days: int) ->
 
 
 def load_fx_rates() -> dict[str, float]:
-    """Return {USDGBP: float, EURGBP: float, ...}."""
-    rates = {"USDGBP": 0.79, "EURGBP": 0.86, "AUDGBP": 0.51}  # fallback defaults
+    """Return {USDEUR: float, GBPEUR: float, ...} — all rates to EUR."""
+    rates = {"USDEUR": 0.92, "GBPEUR": 1.17, "AUDEUR": 0.59}  # fallback defaults
     for pair, yticker in FX_TICKERS.items():
         try:
             df = yf.Ticker(yticker).history(period="2d")
             if not df.empty:
                 raw = float(df["Close"].iloc[-1])
-                # These tickers are GBP/XXX so we need to invert
+                # These tickers are EUR/XXX so we need to invert to get XXX/EUR
                 rates[pair] = 1.0 / raw
         except Exception as e:
             logger.warning(f"FX {pair}: fetch failed, using default {rates[pair]:.4f} — {e}")

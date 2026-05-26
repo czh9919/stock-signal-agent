@@ -2,8 +2,8 @@
 M1 — Holdings consolidation from IBKR, Trading 212, eToro.
 
 Each holding dict:
-  ticker, platform, quantity, cost_basis_gbp, market_value_gbp,
-  unrealised_pnl_gbp, currency, weight (filled later)
+  ticker, platform, quantity, cost_basis_eur, market_value_eur,
+  unrealised_pnl_eur, currency, weight (filled later)
 """
 import logging
 import os
@@ -106,7 +106,7 @@ def fetch_ibkr(fx_rates: dict) -> list[dict]:
                 continue
 
             currency   = pos.get("currency", "USD")
-            rate       = fx_rates.get(f"{currency}GBP", 1.0)
+            rate       = fx_rates.get(f"{currency}EUR", 1.0 if currency == "EUR" else 0.92)
             position   = float(pos.get("position", 0))
             cost       = float(pos.get("costBasisMoney", 0))
 
@@ -132,9 +132,9 @@ def fetch_ibkr(fx_rates: dict) -> list[dict]:
                 "coupon":            coupon,
                 "platform":          "IBKR",
                 "quantity":          position,
-                "cost_basis_gbp":    cost * rate,
-                "market_value_gbp":  mkt_val * rate,
-                "unrealised_pnl_gbp":(mkt_val - cost) * rate,
+                "cost_basis_eur":    cost * rate,
+                "market_value_eur":  mkt_val * rate,
+                "unrealised_pnl_eur":(mkt_val - cost) * rate,
                 "currency":          currency,
             })
     except Exception as e:
@@ -184,10 +184,10 @@ def fetch_t212(fx_rates: dict) -> list[dict]:
                 "asset_class":       "equity",
                 "platform":          "T212",
                 "quantity":          float(pos.get("quantity", 0)),
-                "cost_basis_gbp":    cost,
-                "market_value_gbp":  mv,
-                "unrealised_pnl_gbp":float(pos.get("ppl", 0)),
-                "currency":          "GBP",
+                "cost_basis_eur":    cost,
+                "market_value_eur":  mv,
+                "unrealised_pnl_eur":float(pos.get("ppl", 0)),
+                "currency":          "EUR",
             })
     except Exception as e:
         logger.error(f"T212: parse failed: {e}")
@@ -214,7 +214,7 @@ def fetch_etoro(fx_rates: dict) -> list[dict]:
     try:
         for pos in r.json().get("PublicPortfolio", {}).get("Positions", []):
             currency = "USD"
-            rate     = fx_rates.get("USDGBP", 0.79)
+            rate     = fx_rates.get("USDEUR", 0.92)
             mv       = float(pos.get("NetValue", 0)) * rate
             cost     = float(pos.get("OpenRate", 0)) * float(pos.get("Units", 0)) * rate
             holdings.append({
@@ -223,9 +223,9 @@ def fetch_etoro(fx_rates: dict) -> list[dict]:
                 "asset_class":       "equity",
                 "platform":          "eToro",
                 "quantity":          float(pos.get("Units", 0)),
-                "cost_basis_gbp":    cost,
-                "market_value_gbp":  mv,
-                "unrealised_pnl_gbp":mv - cost,
+                "cost_basis_eur":    cost,
+                "market_value_eur":  mv,
+                "unrealised_pnl_eur":mv - cost,
                 "currency":          currency,
             })
     except Exception as e:
@@ -241,9 +241,9 @@ def fetch_all_holdings(fx_rates: dict) -> list[dict]:
     """Fetch from all three platforms, merge, compute weights."""
     holdings = fetch_ibkr(fx_rates) + fetch_t212(fx_rates) + fetch_etoro(fx_rates)
 
-    total_nav = sum(h["market_value_gbp"] for h in holdings)
+    total_nav = sum(h["market_value_eur"] for h in holdings)
     for h in holdings:
-        h["weight"] = h["market_value_gbp"] / total_nav if total_nav else 0.0
+        h["weight"] = h["market_value_eur"] / total_nav if total_nav else 0.0
 
-    logger.info(f"Total holdings: {len(holdings)}, NAV: £{total_nav:,.2f}")
+    logger.info(f"Total holdings: {len(holdings)}, NAV: €{total_nav:,.2f}")
     return holdings

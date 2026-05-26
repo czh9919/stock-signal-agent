@@ -1,6 +1,6 @@
 """
 M3 — Risk engine: EWMA + GARCH(1,1) + fixed window.
-All amounts normalised to GBP. Returns risk metrics as a dict.
+All amounts normalised to EUR. Returns risk metrics as a dict.
 """
 import logging
 from typing import Optional
@@ -156,7 +156,7 @@ def portfolio_sigma(price_data: dict, holdings: list[dict],
 
 # ── Sharpe ratio ──────────────────────────────────────────────────────────────
 
-def sharpe_ratio(portfolio_ret: pd.Series, rf: float = 0.045) -> float:
+def sharpe_ratio(portfolio_ret: pd.Series, rf: float = 0.035) -> float:
     if len(portfolio_ret) < 21:
         return float("nan")
     ann_ret = float(portfolio_ret.mean() * 252)
@@ -208,8 +208,8 @@ def compute_all(holdings: list[dict], price_data: dict,
     rf         = vcfg.get("risk_free_rate", 0.045)
 
     port_ret   = portfolio_returns(price_data, holdings, window=fixed_win)
-    nav        = sum(h["market_value_gbp"] for h in holdings)
-    total_pnl  = sum(h["unrealised_pnl_gbp"] for h in holdings)
+    nav        = sum(h["market_value_eur"] for h in holdings)
+    total_pnl  = sum(h["unrealised_pnl_eur"] for h in holdings)
     daily_ret  = port_ret.iloc[-1] if not port_ret.empty else float("nan")
 
     var_95_ewma = ewma_var(port_ret, lam=lam, init_window=init_win, confidence=0.95)
@@ -219,8 +219,8 @@ def compute_all(holdings: list[dict], price_data: dict,
     spy_ret = spy_price_data.returns if spy_price_data and spy_price_data.returns is not None else pd.Series(dtype=float)
 
     metrics = {
-        "nav_gbp":           nav,
-        "total_pnl_gbp":     total_pnl,
+        "nav_eur":           nav,
+        "total_pnl_eur":     total_pnl,
         "daily_return":      daily_ret,
         "var_95_ewma":       var_95_ewma,
         "var_99_ewma":       var_99_ewma,

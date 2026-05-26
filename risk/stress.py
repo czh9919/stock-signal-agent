@@ -32,7 +32,7 @@ HYPOTHETICAL_SHOCKS = [
 ]
 
 
-def run_historical(holdings: list[dict], price_data: dict, nav_gbp: float) -> list[dict]:
+def run_historical(holdings: list[dict], price_data: dict, nav_eur: float) -> list[dict]:
     results = []
     weights = {h["ticker"]: h["weight"] for h in holdings}
 
@@ -63,12 +63,12 @@ def run_historical(holdings: list[dict], price_data: dict, nav_gbp: float) -> li
         if covered == 0:
             port_loss = sc["bench"] * 0.8  # rough proxy when no data
 
-        gbp_loss = nav_gbp * port_loss
+        eur_loss = nav_eur * port_loss
         results.append({
             "name":     sc["name"],
             "name_zh":  sc["name_zh"],
             "pct_loss": port_loss,
-            "gbp_loss": gbp_loss,
+            "eur_loss": eur_loss,
             "benchmark":sc["bench"],
             "covered":  covered,
         })
@@ -76,20 +76,20 @@ def run_historical(holdings: list[dict], price_data: dict, nav_gbp: float) -> li
     return sorted(results, key=lambda x: x["pct_loss"])
 
 
-def run_hypothetical(holdings: list[dict], nav_gbp: float) -> list[dict]:
+def run_hypothetical(holdings: list[dict], nav_eur: float) -> list[dict]:
     results = []
     for sc in HYPOTHETICAL_SHOCKS:
-        gbp_loss = nav_gbp * sc["shock"]
+        eur_loss = nav_eur * sc["shock"]
         results.append({
             "name":     sc["name"],
             "name_zh":  sc["name_zh"],
             "pct_loss": sc["shock"],
-            "gbp_loss": gbp_loss,
+            "eur_loss": eur_loss,
         })
     return results
 
 
-def run_monte_carlo(price_data: dict, holdings: list[dict], nav_gbp: float,
+def run_monte_carlo(price_data: dict, holdings: list[dict], nav_eur: float,
                     paths: int = 10_000, horizon: int = 30,
                     corr_window: int = 63, lam: float = 0.94) -> dict:
     """
@@ -140,15 +140,15 @@ def run_monte_carlo(price_data: dict, holdings: list[dict], nav_gbp: float,
         "var_95":        var_95,
         "cvar_95":       cvar_95,
         "p_positive":    p_pos,
-        "gbp_var_95":    var_95 * nav_gbp,
-        "gbp_cvar_95":   cvar_95 * nav_gbp,
+        "eur_var_95":    var_95 * nav_eur,
+        "eur_cvar_95":   cvar_95 * nav_eur,
         "paths":         paths,
         "horizon_days":  horizon,
     }
 
 
 def run_correlation_breakdown(price_data: dict, holdings: list[dict],
-                               nav_gbp: float, crisis_rho: float = 0.85,
+                               nav_eur: float, crisis_rho: float = 0.85,
                                lam: float = 0.94) -> dict:
     """
     Compare portfolio σ under normal vs crisis (all correlations → 0.85) conditions.
@@ -195,7 +195,7 @@ def run_correlation_breakdown(price_data: dict, holdings: list[dict],
     }
 
 
-def run_liquidity(holdings: list[dict], price_data: dict, nav_gbp: float,
+def run_liquidity(holdings: list[dict], price_data: dict, nav_eur: float,
                   days: int = 3, adv_threshold: float = 5.0) -> list[dict]:
     """
     Flag positions where size > 5× 3-day ADV.
@@ -223,27 +223,27 @@ def run_liquidity(holdings: list[dict], price_data: dict, nav_gbp: float,
                 "quantity":      qty,
                 "adv_3d":        adv_3,
                 "adv_ratio":     qty / adv_3 if adv_3 else float("nan"),
-                "market_value":  h["market_value_gbp"],
+                "market_value":  h["market_value_eur"],
             })
 
     return results
 
 
-def run_all(holdings: list[dict], price_data: dict, nav_gbp: float,
+def run_all(holdings: list[dict], price_data: dict, nav_eur: float,
             vol_cfg: dict = None) -> dict:
     vcfg = vol_cfg or {}
     mc_cfg   = vcfg.get("monte_carlo", {})
     lam      = vcfg.get("ewma", {}).get("lambda", 0.94)
     corr_win = vcfg.get("windows", {}).get("correlation", 63)
 
-    historical   = run_historical(holdings, price_data, nav_gbp)
-    hypothetical = run_hypothetical(holdings, nav_gbp)
-    mc           = run_monte_carlo(price_data, holdings, nav_gbp,
+    historical   = run_historical(holdings, price_data, nav_eur)
+    hypothetical = run_hypothetical(holdings, nav_eur)
+    mc           = run_monte_carlo(price_data, holdings, nav_eur,
                                    paths=mc_cfg.get("paths", 10_000),
                                    horizon=mc_cfg.get("horizon_days", 30),
                                    corr_window=corr_win, lam=lam)
-    corr_breakdown = run_correlation_breakdown(price_data, holdings, nav_gbp, lam=lam)
-    liquidity      = run_liquidity(holdings, price_data, nav_gbp)
+    corr_breakdown = run_correlation_breakdown(price_data, holdings, nav_eur, lam=lam)
+    liquidity      = run_liquidity(holdings, price_data, nav_eur)
 
     return {
         "historical":       historical,
