@@ -48,17 +48,22 @@ def build_report(metrics: dict, stress: dict, holdings: list[dict],
                  frontier: Optional[dict] = None,
                  suggestions: Optional[list] = None,
                  has_chart_en: bool = False,
-                 has_chart_zh: bool = False) -> tuple[str, str]:
+                 has_chart_zh: bool = False,
+                 div_candidates: Optional[list] = None,
+                 fx_rates: Optional[dict] = None) -> tuple[str, str]:
     """Returns (html_en, html_zh)."""
     en = _build(metrics, stress, holdings, price_data, last_week, "en",
-                frontier, suggestions, has_chart=has_chart_en)
+                frontier, suggestions, has_chart=has_chart_en,
+                div_candidates=div_candidates, fx_rates=fx_rates)
     zh = _build(metrics, stress, holdings, price_data, last_week, "zh",
-                frontier, suggestions, has_chart=has_chart_zh)
+                frontier, suggestions, has_chart=has_chart_zh,
+                div_candidates=div_candidates, fx_rates=fx_rates)
     return en, zh
 
 
 def _build(metrics, stress, holdings, price_data, last_week, lang,
-           frontier=None, suggestions=None, has_chart=False):
+           frontier=None, suggestions=None, has_chart=False,
+           div_candidates=None, fx_rates=None):
     t        = _T[lang]
     rag      = metrics.get("overall_rag", "GREY")
     rag_col  = _RAG_COLOR[rag]
@@ -300,6 +305,99 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
   </table>
 </div>""")
 
+    # ── Diversification candidates (bonds / gold) ─────────────────────────────
+    if div_candidates:
+        usdeur = (fx_rates or {}).get("USDEUR", 0.92)
+        gbpeur = (fx_rates or {}).get("GBPEUR", 1.17)
+
+        _FX_RATE = {"USD": usdeur, "GBP": gbpeur, "EUR": 1.0}
+        _CLS_LABEL = {
+            "bond": ("Bond", "债券"),
+            "gold": ("Gold", "黄金"),
+        }
+        _ASSET_ICON = {"bond": "🏦", "gold": "🥇"}
+
+        dc_rows = ""
+        for c in div_candidates:
+            ticker    = c["ticker"]
+            sw        = c["suggested_weight"]
+            ds        = c["delta_sharpe"]
+            dv        = c["delta_vol"]
+            corr      = c["corr_to_portfolio"]
+            ann_ret   = c["ann_ret"]
+            ann_vol   = c["ann_vol"]
+            ccy       = c.get("currency", "USD")
+            cls_key   = c.get("asset_class", "bond")
+            name      = c.get("name", ticker)
+
+            cls_en, cls_zh = _CLS_LABEL.get(cls_key, (cls_key, cls_key))
+            cls_label = cls_zh if lang == "zh" else cls_en
+
+            # FX note for non-EUR assets
+            fx_rate   = _FX_RATE.get(ccy, usdeur)
+            fx_note   = (f"<br><span style='color:#aaa;font-size:10px'>"
+                         f"{ccy} · 1{ccy}=€{fx_rate:.3f}</span>"
+                         if ccy != "EUR" else "")
+
+            # Suggested weight: show dash if at optimizer lower bound
+            sw_str = f"{sw*100:.1f}%" if sw > 0.006 else ("—" if lang == "en" else "—")
+
+            # Colour: green if positive impact, amber if neutral, grey if minimal
+            if sw > 0.006 and ds > 0:
+                row_bg  = "#f0fdf4"
+                ds_col  = "#27ae60"
+                verdict = t["dc_add"] if lang == "zh" else t["dc_add"]
+            elif sw > 0.006:
+                row_bg  = "#fef9f0"
+                ds_col  = "#e67e22"
+                verdict = t["dc_watch"]
+            else:
+                row_bg  = "#f9f9f9"
+                ds_col  = "#95a5a6"
+                verdict = t["dc_skip"]
+
+            dv_col  = "#27ae60" if dv < 0 else "#e67e22"
+            corr_col = "#27ae60" if corr < 0.3 else ("#e67e22" if corr < 0.6 else "#c0392b")
+
+            dc_rows += (
+                f"<tr style='background:{row_bg}'>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #f0f0f0;font-size:12px'>"
+                f"<b>{ticker}</b>{fx_note}<br>"
+                f"<span style='color:#888;font-size:10px'>{name}</span></td>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #f0f0f0;font-size:11px;"
+                f"color:#666'>{cls_label}</td>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"font-weight:600'>{sw_str}</td>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{ds_col};font-weight:600'>{'+' if ds>0 else ''}{ds:.2f}</td>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{dv_col}'>{'+' if dv>0 else ''}{dv*100:.1f}%</td>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;"
+                f"color:{corr_col}'>{corr:+.2f}</td>"
+                f"<td style='padding:7px 8px;border-bottom:1px solid #f0f0f0;font-size:11px;"
+                f"color:#666'>{_pct(ann_ret)} / {_pct(ann_vol)}</td>"
+                f"</tr>"
+            )
+
+        sections.append(f"""
+<div style="padding:0 20px 16px">
+  <h2 style="font-size:14px;color:#444;margin:0 0 10px;border-bottom:1px solid #eee;padding-bottom:6px">
+    {t['div_candidates']}
+  </h2>
+  <p style="font-size:11px;color:#aaa;margin:0 0 8px">{t['div_note']}</p>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#f8f9ff">
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['ticker']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['dc_type']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['dc_weight']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">ΔSharpe</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">ΔVol</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['dc_corr']}</th>
+      <th style="padding:5px 8px;text-align:left;font-size:12px;color:#666">{t['dc_stats']}</th>
+    </tr>{dc_rows}
+  </table>
+</div>""")
+
     # ── Top 10 equity positions ────────────────────────────────────────────────
     equity_h = [h for h in holdings if h.get("asset_class", "equity") == "equity"]
     top10    = sorted(equity_h, key=lambda h: h["market_value_eur"], reverse=True)[:10]
@@ -487,6 +585,15 @@ _T = {
         "bond_holdings":  "Bond Holdings",
         "bond_desc":      "Description",
         "mkt_val":        "Market Value",
+        "div_candidates": "Diversification Candidates",
+        "div_note":       "Marginal impact on equity portfolio at optimizer-suggested weight. ΔSharpe > 0 = beneficial. Corr < 0.3 = good diversifier.",
+        "dc_type":        "Type",
+        "dc_weight":      "Sug. Weight",
+        "dc_corr":        "Corr",
+        "dc_stats":       "Ret / Vol",
+        "dc_add":         "Consider",
+        "dc_watch":       "Monitor",
+        "dc_skip":        "Low benefit",
         "footer_note":    "For informational purposes only. Not investment advice.",
         "alert_labels": {
             "var_95":    "VaR (95%) > 5% NAV",
@@ -545,6 +652,15 @@ _T = {
         "bond_holdings":  "债券持仓",
         "bond_desc":      "债券名称",
         "mkt_val":        "市值",
+        "div_candidates": "多元化候选资产",
+        "div_note":       "按优化器建议权重加入时对股票组合的边际影响。ΔSharpe > 0 = 有益，相关性 < 0.3 = 良好分散效果。",
+        "dc_type":        "类型",
+        "dc_weight":      "建议配置",
+        "dc_corr":        "相关性",
+        "dc_stats":       "收益/波动",
+        "dc_add":         "可考虑",
+        "dc_watch":       "持续观察",
+        "dc_skip":        "效益有限",
         "footer_note":    "本报告仅供参考，不构成投资建议。",
         "alert_labels": {
             "var_95":    "VaR(95%) > 组合市值5%",

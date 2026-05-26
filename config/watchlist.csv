@@ -1,12 +1,16 @@
-ticker,weight,notes
-AAPL,1.0,Apple Inc
-MSFT,1.0,Microsoft Corp
-NVDA,1.0,NVIDIA Corp
-TSLA,1.0,Tesla Inc
-AMZN,1.0,Amazon.com Inc
-GOOGL,1.0,Alphabet Inc
-META,1.0,Meta Platforms
-SPY,1.0,S&P 500 ETF
-QQQ,1.0,Nasdaq 100 ETF
-NBIS,1.0,Nebius Group
-AMD,1.0,Advanced Micro Devices
+ticker,weight,notes,asset_class,currency
+AAPL,1.0,Apple Inc,equity,USD
+MSFT,1.0,Microsoft Corp,equity,USD
+NVDA,1.0,NVIDIA Corp,equity,USD
+TSLA,1.0,Tesla Inc,equity,USD
+AMZN,1.0,Amazon.com Inc,equity,USD
+GOOGL,1.0,Alphabet Inc,equity,USD
+META,1.0,Meta Platforms,equity,USD
+SPY,1.0,S&P 500 ETF,equity,USD
+QQQ,1.0,Nasdaq 100 ETF,equity,USD
+NBIS,1.0,Nebius Group,equity,USD
+AMD,1.0,Advanced Micro Devices,equity,USD
+TLT,1.0,iShares 20+ Year Treasury Bond ETF,bond,USD
+IEF,1.0,iShares 7-10 Year Treasury Bond ETF,bond,USD
+AGG,1.0,iShares Core U.S. Aggregate Bond ETF,bond,USD
+GLD,1.0,SPDR Gold Shares,gold,USD

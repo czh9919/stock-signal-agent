@@ -227,7 +227,7 @@ def run_portfolio_pipeline(run_mode: str = "full"):
         return
 
     from risk.stress       import run_all as run_stress
-    from risk.optimizer    import compute_frontier, rebalancing_suggestions
+    from risk.optimizer    import compute_frontier, rebalancing_suggestions, marginal_impact
     from notify.report_gen import build_report
     from notify.chart      import risk_return_png
     from notify            import mailer
@@ -237,16 +237,37 @@ def run_portfolio_pipeline(run_mode: str = "full"):
     cache.save_snapshot(snapshot)
     last_week   = cache.load_week_ago_snapshot()
 
-    rf          = thresholds.get("risk_free_rate", 0.045)
+    rf          = thresholds.get("risk_free_rate", 0.035)
     frontier    = compute_frontier(price_data, holdings, rf=rf)
     suggestions = rebalancing_suggestions(holdings, frontier, nav_eur=metrics["nav_eur"])
     chart_en    = risk_return_png(frontier, "en")
     chart_zh    = risk_return_png(frontier, "zh")
 
+    # ── Diversification candidates (bonds + gold from watchlist) ──────────────
+    watchlist_all  = load_watchlist()
+    wl_map         = {w["ticker"]: w for w in watchlist_all}
+    cand_entries   = [w for w in watchlist_all if w.get("asset_class") in ("bond", "gold")]
+    div_candidates = []
+    if cand_entries:
+        new_tickers   = [w["ticker"] for w in cand_entries if w["ticker"] not in price_data]
+        cand_pd_extra = load_prices(new_tickers, days=vol_cfg.get("windows", {}).get("fixed", 252)) if new_tickers else {}
+        for entry in cand_entries:
+            tk     = entry["ticker"]
+            pd_obj = cand_pd_extra.get(tk) or price_data.get(tk)
+            impact = marginal_impact(tk, pd_obj, holdings, price_data, rf=rf)
+            if impact:
+                impact["currency"]    = entry.get("currency", "USD")
+                impact["asset_class"] = entry.get("asset_class", "bond")
+                impact["name"]        = entry.get("notes", tk)
+                div_candidates.append(impact)
+        div_candidates.sort(key=lambda x: x["delta_sharpe"], reverse=True)
+        logger.info(f"Diversification candidates: {len(div_candidates)} computed")
+
     html_en, html_zh = build_report(
         metrics, stress, holdings, price_data, last_week=last_week,
         frontier=frontier, suggestions=suggestions,
         has_chart_en=bool(chart_en), has_chart_zh=bool(chart_zh),
+        div_candidates=div_candidates, fx_rates=fx_rates,
     )
     mailer.send_report(html_en, html_zh, rag=metrics["overall_rag"],
                        chart_en=chart_en, chart_zh=chart_zh)

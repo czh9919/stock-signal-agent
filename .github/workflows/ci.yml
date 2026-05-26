@@ -69,13 +69,30 @@ jobs:
           holdings = [{"ticker": "AAPL", "platform": "IBKR", "weight": 0.6,
                        "market_value_eur": 6000, "cost_basis_eur": 5000,
                        "unrealised_pnl_eur": 1000, "asset_class": "equity"}]
+          div_candidates = [
+              {"ticker": "TLT", "suggested_weight": 0.08, "delta_sharpe": 0.12,
+               "delta_vol": -0.02, "corr_to_portfolio": -0.35,
+               "ann_ret": 0.04, "ann_vol": 0.11,
+               "currency": "USD", "asset_class": "bond", "name": "iShares 20+ Year Treasury Bond ETF"},
+              {"ticker": "GLD", "suggested_weight": 0.05, "delta_sharpe": 0.06,
+               "delta_vol": -0.01, "corr_to_portfolio": -0.05,
+               "ann_ret": 0.07, "ann_vol": 0.14,
+               "currency": "USD", "asset_class": "gold", "name": "SPDR Gold Shares"},
+          ]
+          fx_rates = {"USDEUR": 0.920, "GBPEUR": 1.170, "AUDEUR": 0.590}
           html_en, html_zh = build_report(
               metrics, {}, holdings, {},
               frontier=frontier, suggestions=suggestions,
               has_chart_en=True, has_chart_zh=False,
+              div_candidates=div_candidates, fx_rates=fx_rates,
           )
           assert "cid:rrChart" in html_en
           assert "Act" in html_en
           assert "立即行动" in html_zh
+          assert "Diversification Candidates" in html_en, "div candidates section missing"
+          assert "多元化候选资产" in html_zh, "div candidates ZH section missing"
+          assert "TLT" in html_en and "GLD" in html_en, "candidate tickers missing"
+          assert "0.920" in html_en, "USD/EUR FX rate missing"
+          assert chr(163) not in html_en, "GBP pound sign leaked into EUR report"
           print("Smoke test passed")
           EOF

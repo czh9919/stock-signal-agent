@@ -2,6 +2,7 @@
 Markowitz mean-variance optimizer.
   compute_frontier()         — Monte Carlo cloud + max-Sharpe portfolio
   rebalancing_suggestions()  — 3-tier rebalancing vs optimal weights
+  marginal_impact()          — portfolio impact of adding a candidate asset
 """
 import logging
 from typing import Optional
@@ -24,19 +25,26 @@ def _stats(w: np.ndarray, mu: np.ndarray, cov: np.ndarray,
 def _max_sharpe(mu: np.ndarray, cov: np.ndarray,
                 rf: float = 0.035,
                 w_bounds: tuple = (0.005, 0.30)) -> Optional[np.ndarray]:
-    n = len(mu)
-    w0 = np.ones(n) / n
+    n    = len(mu)
     cons = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
-    res = minimize(
-        lambda w: -_stats(w, mu, cov, rf)[2],
-        w0, method="SLSQP",
-        bounds=[w_bounds] * n,
-        constraints=cons,
-        options={"maxiter": 600, "ftol": 1e-9},
-    )
-    if res.success:
-        return res.x
-    logger.warning(f"Max-Sharpe optimizer: {res.message}")
+    bnds = [w_bounds] * n
+    rng  = np.random.default_rng(42)
+
+    # Try uniform start then 4 random starts; relax ftol progressively
+    starts = [np.ones(n) / n] + [rng.dirichlet(np.ones(n)) for _ in range(4)]
+    for w0 in starts:
+        w0 = np.clip(w0, w_bounds[0], w_bounds[1])
+        w0 = w0 / w0.sum()
+        for ftol in (1e-9, 1e-7, 1e-5):
+            res = minimize(
+                lambda w: -_stats(w, mu, cov, rf)[2],
+                w0, method="SLSQP",
+                bounds=bnds, constraints=cons,
+                options={"maxiter": 800, "ftol": ftol},
+            )
+            if res.success:
+                return res.x
+    logger.warning("Max-Sharpe: all starting points failed")
     return None
 
 
@@ -166,3 +174,96 @@ def rebalancing_suggestions(holdings: list[dict], frontier: dict,
         })
 
     return sorted(rows, key=lambda x: (x["tier"], -abs(x["delta"])))
+
+
+def marginal_impact(
+    candidate_ticker: str,
+    candidate_pd,
+    holdings: list[dict],
+    price_data: dict,
+    rf: float = 0.035,
+) -> Optional[dict]:
+    """
+    Compute the marginal portfolio impact of adding candidate_ticker.
+
+    Compares max-Sharpe optimal portfolio *without* vs *with* the candidate.
+    Returns None when there is insufficient aligned price history.
+
+    Keys returned:
+      ticker, suggested_weight, delta_sharpe, delta_vol,
+      corr_to_portfolio, ann_ret, ann_vol
+    """
+    if (candidate_pd is None
+            or candidate_pd.status not in ("ok", "reduced")
+            or candidate_pd.returns is None):
+        return None
+
+    valid = [
+        h for h in holdings
+        if h.get("asset_class", "equity") == "equity"
+        and price_data.get(h["ticker"])
+        and price_data[h["ticker"]].status in ("ok", "reduced")
+        and price_data[h["ticker"]].returns is not None
+    ]
+    if not valid:
+        return None
+
+    tickers = [h["ticker"] for h in valid]
+    w_cur   = np.array([h["weight"] for h in valid])
+    if w_cur.sum() > 1e-9:
+        w_cur = w_cur / w_cur.sum()
+
+    # Align returns: existing equity holdings + candidate
+    ret_dict = {t: price_data[t].returns for t in tickers}
+    ret_dict[candidate_ticker] = candidate_pd.returns
+    ret_df = pd.concat(ret_dict, axis=1).dropna()
+    if len(ret_df) < 21:
+        logger.info(f"marginal_impact {candidate_ticker}: only {len(ret_df)} aligned days — skipping")
+        return None
+
+    n = len(tickers)
+    mu_all  = ret_df.mean().values * 252
+    # Tikhonov regularisation: guards against near-singular covariance matrices
+    cov_all = ret_df.cov().values * 252 + np.eye(n + 1) * 1e-8
+
+    # Baseline: optimal portfolio WITHOUT candidate
+    mu_base  = mu_all[:n]
+    cov_base = cov_all[:n, :n]
+    opt_base = _max_sharpe(mu_base, cov_base, rf)
+    if opt_base is not None:
+        _, base_vol, base_sharpe = _stats(opt_base, mu_base, cov_base, rf)
+    else:
+        _, base_vol, base_sharpe = _stats(w_cur, mu_base, cov_base, rf)
+
+    # Optimal WITH candidate — full optimizer, fallback to grid scan
+    opt_with = _max_sharpe(mu_all, cov_all, rf)
+    if opt_with is not None:
+        _, opt_vol, opt_sharpe = _stats(opt_with, mu_all, cov_all, rf)
+        suggested_weight = float(opt_with[-1])
+    else:
+        # Grid scan: hold existing weights fixed (normalised), vary candidate weight
+        best_sharpe = -np.inf
+        best_w_c    = 0.005
+        for w_c in np.arange(0.005, 0.31, 0.01):
+            w_full = np.append(w_cur * (1 - w_c), w_c)
+            _, _, sh = _stats(w_full, mu_all, cov_all, rf)
+            if sh > best_sharpe:
+                best_sharpe = sh
+                best_w_c    = w_c
+        w_full = np.append(w_cur * (1 - best_w_c), best_w_c)
+        _, opt_vol, opt_sharpe = _stats(w_full, mu_all, cov_all, rf)
+        suggested_weight = float(best_w_c)
+
+    # Correlation of candidate to current equity portfolio
+    port_ret = (ret_df.iloc[:, :n] * w_cur).sum(axis=1)
+    corr     = float(port_ret.corr(ret_df[candidate_ticker]))
+
+    return {
+        "ticker":            candidate_ticker,
+        "suggested_weight":  suggested_weight,
+        "delta_sharpe":      opt_sharpe - base_sharpe,
+        "delta_vol":         opt_vol    - base_vol,
+        "corr_to_portfolio": corr,
+        "ann_ret":           float(mu_all[-1]),
+        "ann_vol":           float(np.sqrt(max(cov_all[-1, -1], 0.0))),
+    }
