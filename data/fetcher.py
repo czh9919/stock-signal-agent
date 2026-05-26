@@ -25,7 +25,8 @@ class StockFetcher:
         try:
             end = datetime.now()
             start = end - timedelta(days=days)
-            df = yf.Ticker(ticker).history(start=start, end=end)
+            # auto_adjust=True: split- and dividend-adjusted closes
+            df = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=True)
             if df.empty:
                 logger.warning(f"{ticker}: no price data returned")
                 return None

@@ -10,11 +10,13 @@ Availability flags (PRD §6.1):
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 import yfinance as yf
+
+STALE_PRICE_DAYS = 4   # last close must be ≤4 calendar days old
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,8 @@ def load_prices(tickers: list[str], days: int = 252) -> dict[str, PriceData]:
 
 def _fetch_one(ticker: str, start: datetime, end: datetime, target_days: int) -> PriceData:
     try:
-        df = yf.Ticker(ticker).history(start=start, end=end)
+        # auto_adjust=True: split- and dividend-adjusted closes (explicit, not default-dependent)
+        df = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=True)
         if df is None or df.empty:
             logger.warning(f"{ticker}: not found on yfinance")
             return PriceData(ticker=ticker, closes=None, returns=None,
@@ -56,6 +59,16 @@ def _fetch_one(ticker: str, start: datetime, end: datetime, target_days: int) ->
         closes  = df["Close"].dropna()
         n       = len(closes)
         returns = closes.pct_change().dropna()
+
+        # Staleness check — last close should be recent
+        if n > 0:
+            last_date = pd.Timestamp(closes.index[-1]).date()
+            days_old  = (date.today() - last_date).days
+            if days_old > STALE_PRICE_DAYS:
+                logger.warning(
+                    f"{ticker}: last close {last_date} is {days_old}d old "
+                    f"— possible halt, delisting, or weekend/holiday gap"
+                )
 
         if n < 21:
             logger.warning(f"{ticker}: only {n} days — excluded from VaR")
@@ -80,14 +93,25 @@ def _fetch_one(ticker: str, start: datetime, end: datetime, target_days: int) ->
 
 def load_fx_rates() -> dict[str, float]:
     """Return {USDEUR: float, GBPEUR: float, ...} — all rates to EUR."""
-    rates = {"USDEUR": 0.92, "GBPEUR": 1.17, "AUDEUR": 0.59}  # fallback defaults
+    # Hardcoded fallbacks — used only when the live fetch fails.
+    # These are approximate; flag clearly in logs if triggered.
+    defaults = {"USDEUR": 0.92, "GBPEUR": 1.17, "AUDEUR": 0.59}
+    rates = dict(defaults)
     for pair, yticker in FX_TICKERS.items():
         try:
-            df = yf.Ticker(yticker).history(period="2d")
-            if not df.empty:
-                raw = float(df["Close"].iloc[-1])
-                # These tickers are EUR/XXX so we need to invert to get XXX/EUR
-                rates[pair] = 1.0 / raw
+            df = yf.Ticker(yticker).history(period="5d", auto_adjust=True)
+            if df.empty:
+                logger.warning(f"FX {pair}: empty response — using stale default {defaults[pair]:.4f}")
+                continue
+            last_date = pd.Timestamp(df.index[-1]).date()
+            days_old  = (date.today() - last_date).days
+            if days_old > STALE_PRICE_DAYS:
+                logger.warning(
+                    f"FX {pair}: rate from {last_date} ({days_old}d ago) — "
+                    f"possible weekend/holiday, using it but flag as stale"
+                )
+            raw = float(df["Close"].iloc[-1])
+            rates[pair] = 1.0 / raw   # EUR/XXX → XXX/EUR
         except Exception as e:
-            logger.warning(f"FX {pair}: fetch failed, using default {rates[pair]:.4f} — {e}")
+            logger.warning(f"FX {pair}: fetch failed, using default {defaults[pair]:.4f} — {e}")
     return rates

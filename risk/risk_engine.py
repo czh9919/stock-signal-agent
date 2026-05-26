@@ -15,6 +15,75 @@ Z95 = 1.6449
 Z99 = 2.3263
 
 
+# ── Cornish-Fisher modified VaR ───────────────────────────────────────────────
+
+def cornish_fisher_z(z: float, skew: float, exkurt: float) -> float:
+    """
+    Cornish-Fisher expansion: adjust the normal quantile for skewness (S) and
+    excess kurtosis (K).  z_cf = z + (z²-1)S/6 + (z³-3z)K/24 - (2z³-5z)S²/36
+    """
+    return (z
+            + (z**2 - 1) * skew / 6
+            + (z**3 - 3 * z) * exkurt / 24
+            - (2 * z**3 - 5 * z) * skew**2 / 36)
+
+
+def cf_var(portfolio_returns: pd.Series, sigma_t: float,
+           confidence: float = 0.95) -> float:
+    """
+    Cornish-Fisher modified VaR: EWMA volatility adjusted for the empirical
+    skewness and excess kurtosis of the return distribution.
+    Equity returns are typically negatively skewed and fat-tailed; the plain
+    normal VaR underestimates by ~15–30% in stress regimes.  CF corrects this.
+
+    We use the LOWER-tail quantile z = norm.ppf(1-confidence) < 0 so that
+    negative skew pushes z_cf more negative → larger VaR (correct direction).
+    pandas .kurt() returns *excess* kurtosis (Fisher definition).
+    """
+    if len(portfolio_returns) < 21 or np.isnan(sigma_t):
+        return float("nan")
+    z    = norm.ppf(1 - confidence)          # negative, e.g. -1.645 for 95%
+    skew = float(portfolio_returns.skew())
+    exk  = float(portfolio_returns.kurt())   # excess kurtosis
+    z_cf = cornish_fisher_z(z, skew, exk)   # more negative for left-skewed returns
+    mu   = float(portfolio_returns.mean())
+    return float(-mu - z_cf * sigma_t)      # -z_cf > 0 gives the loss magnitude
+
+
+# ── EVT / Peaks-over-Threshold VaR ───────────────────────────────────────────
+
+def evt_var_gpd(portfolio_returns: pd.Series, confidence: float = 0.99,
+                threshold_pct: float = 0.10) -> float:
+    """
+    Extreme Value Theory VaR via Peaks-over-Threshold and Generalized Pareto
+    Distribution.  Reliable for extreme quantiles (99 %+) where the normal and
+    CF approximations deteriorate.
+
+    threshold_pct = fraction of worst returns used as threshold (default 10 %).
+    Falls back to historical VaR when fewer than 20 threshold exceedances exist.
+    """
+    from scipy.stats import genpareto
+    if len(portfolio_returns) < 60:
+        return float("nan")
+    losses = -portfolio_returns.values          # positive = loss
+    u      = np.percentile(losses, (1 - threshold_pct) * 100)
+    excess = losses[losses > u] - u
+    if len(excess) < 20:
+        logger.debug(f"EVT: only {len(excess)} exceedances — fallback to historical VaR")
+        return fixed_var_cvar(portfolio_returns, confidence)[0]
+    try:
+        shape, _, scale = genpareto.fit(excess, floc=0)
+        p = (1 - confidence) / threshold_pct   # conditional exceedance prob
+        if abs(shape) < 1e-8:                   # exponential special case
+            x = u - scale * np.log(p)
+        else:
+            x = u + scale / shape * (p ** (-shape) - 1)
+        return float(x)
+    except Exception as exc:
+        logger.debug(f"EVT GPD fit failed ({exc}) — fallback to historical VaR")
+        return fixed_var_cvar(portfolio_returns, confidence)[0]
+
+
 # ── EWMA VaR ─────────────────────────────────────────────────────────────────
 
 def ewma_variance_series(returns: pd.Series, lam: float = 0.94,
@@ -216,14 +285,24 @@ def compute_all(holdings: list[dict], price_data: dict,
     var_99_ewma = ewma_var(port_ret, lam=lam, init_window=init_win, confidence=0.99)
     var_95_hist, cvar_95 = fixed_var_cvar(port_ret, 0.95)
 
+    # Cornish-Fisher (adjusts for skewness + fat tails) and EVT corrections
+    var_series = ewma_variance_series(port_ret, lam=lam, init_window=init_win)
+    sigma_t    = float(np.sqrt(var_series.iloc[-1])) if len(var_series) > 0 else float("nan")
+    var_95_cf  = cf_var(port_ret, sigma_t, confidence=0.95)
+    var_99_cf  = cf_var(port_ret, sigma_t, confidence=0.99)
+    var_99_evt = evt_var_gpd(port_ret, confidence=0.99)
+
     spy_ret = spy_price_data.returns if spy_price_data and spy_price_data.returns is not None else pd.Series(dtype=float)
 
     metrics = {
         "nav_eur":           nav,
         "total_pnl_eur":     total_pnl,
         "daily_return":      daily_ret,
-        "var_95_ewma":       var_95_ewma,
+        "var_95_ewma":       var_95_ewma,   # plain normal — kept for comparison
         "var_99_ewma":       var_99_ewma,
+        "var_95_cf":         var_95_cf,    # Cornish-Fisher (primary alert trigger)
+        "var_99_cf":         var_99_cf,
+        "var_99_evt":        var_99_evt,   # EVT / GPD (extreme quantile)
         "var_95_hist":       var_95_hist,
         "cvar_95":           cvar_95,
         "cvar_var_ratio":    cvar_95 / var_95_hist if var_95_hist else float("nan"),
@@ -245,7 +324,7 @@ def compute_all(holdings: list[dict], price_data: dict,
     alerts = {}
     if thresholds:
         t = thresholds.get("alerts", {})
-        alerts["var_95"]      = rag(metrics["var_95_ewma"],    t.get("var_95_pct",         {}).get("threshold", 0.05))
+        alerts["var_95"]      = rag(metrics["var_95_cf"],      t.get("var_95_pct",         {}).get("threshold", 0.05))
         alerts["cvar_ratio"]  = rag(metrics["cvar_var_ratio"], t.get("cvar_var_ratio",      {}).get("threshold", 1.8))
         alerts["max_dd"]      = rag(abs(metrics["max_drawdown"]), t.get("max_drawdown",     {}).get("threshold", 0.20))
         alerts["max_pos"]     = rag(metrics["max_position_wt"], t.get("max_single_position",{}).get("threshold", 0.30))

@@ -76,8 +76,11 @@ def ff_implied_mu(ret_df: pd.DataFrame, rf: float = 0.035) -> np.ndarray:
         logger.warning(f"Only {len(aligned)} days overlap with FF5 — using historical mean μ")
         return ret_df.mean().values * 252
 
-    # Full-history annualised factor premiums (robust to recent-period noise)
-    factor_prem_ann = ff5[_FF5_FACTORS].mean().values * 252
+    # Use only factor data up to the last training date — avoids lookahead in
+    # walk-forward backtests where ret_df is a historical training slice.
+    # In production ret_df covers the most recent window so this is equivalent
+    # to the prior full-history approach.
+    factor_prem_ann = aligned[_FF5_FACTORS].mean().values * 252
 
     X   = aligned[_FF5_FACTORS].values
     X_c = np.column_stack([np.ones(len(X)), X])   # intercept + 5 factors

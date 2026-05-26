@@ -1,12 +1,14 @@
 import logging
+from datetime import date
 from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-MAX_DAILY_MOVE = 0.50  # 50% — triggers human review flag
-MAX_MISSING_DAYS = 30  # allow ~1.5 months for holidays/weekends rounding
+MAX_DAILY_MOVE   = 0.50  # 50% — triggers human review flag
+MAX_MISSING_DAYS = 10    # >10 missing trading days (~2 weeks) flags a gap
+STALE_PRICE_DAYS = 4     # last row must be ≤4 calendar days old (covers long weekends)
 
 
 class DataCleaner:
@@ -36,10 +38,19 @@ class DataCleaner:
         daily_returns = df["Close"].pct_change().abs()
         anomalies = daily_returns[daily_returns > MAX_DAILY_MOVE]
         if not anomalies.empty:
-            for date, ret in anomalies.items():
-                msg = f"{ticker}: abnormal price move {ret:.1%} on {date.date()} — manual review recommended"
+            for dt, ret in anomalies.items():
+                msg = f"{ticker}: abnormal price move {ret:.1%} on {pd.Timestamp(dt).date()} — manual review recommended"
                 logger.warning(msg)
                 warnings.append(msg)
+
+        # Detect stale / frozen price — last row should be recent
+        last_date  = pd.Timestamp(df.index[-1]).date()
+        days_stale = (date.today() - last_date).days
+        if days_stale > STALE_PRICE_DAYS:
+            msg = (f"{ticker}: last price date is {last_date} "
+                   f"({days_stale}d ago) — possible halt, delisting, or feed freeze")
+            logger.warning(msg)
+            warnings.append(msg)
 
         return df, warnings
 

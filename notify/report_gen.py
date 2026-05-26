@@ -102,7 +102,7 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
     # ── Snapshot cards ─────────────────────────────────────────────────────────
     nav      = metrics.get("nav_eur", 0)
     pnl      = metrics.get("total_pnl_eur", 0)
-    var95    = metrics.get("var_95_ewma")
+    var95    = metrics.get("var_95_cf", metrics.get("var_95_ewma"))  # CF-adjusted, fallback to EWMA
     sharpe   = metrics.get("sharpe")
     pnl_col  = "#27ae60" if (pnl or 0) >= 0 else "#c0392b"
 
@@ -186,14 +186,16 @@ def _build(metrics, stress, holdings, price_data, last_week, lang,
     prev_m = prev_metrics
     # Each row: (key, en_label, zh_label, val, prev_val, (en_desc, zh_desc))
     risk_rows = [
-        ("var_95",   "VaR (95%)",    "VaR（95%）",
-         _pct(metrics.get("var_95_ewma")),   _pct(prev_m.get("var_95_ewma")),
-         ("Worst-case 1-in-20 daily loss as % of NAV",
-          "1/20概率最差日损失，占总市值的比例")),
-        ("var_99",   "VaR (99%)",    "VaR（99%）",
-         _pct(metrics.get("var_99_ewma")),   _pct(prev_m.get("var_99_ewma")),
-         ("Worst-case 1-in-100 daily loss as % of NAV",
-          "1/100概率最差日损失，占总市值的比例")),
+        ("var_95",   "VaR 95% (adj.)",    "VaR 95%（Cornish-Fisher）",
+         _pct(metrics.get("var_95_cf", metrics.get("var_95_ewma"))),
+         _pct(prev_m.get("var_95_cf",  prev_m.get("var_95_ewma"))),
+         ("1-in-20 daily loss — EWMA volatility corrected for skewness & kurtosis",
+          "1/20概率最差日损失，已对偏态与厚尾进行Cornish-Fisher修正")),
+        ("var_99",   "VaR 99% (EVT/adj.)", "VaR 99%（EVT/CF）",
+         _pct(metrics.get("var_99_evt",  metrics.get("var_99_cf", metrics.get("var_99_ewma")))),
+         _pct(prev_m.get("var_99_evt",   prev_m.get("var_99_cf",  prev_m.get("var_99_ewma")))),
+         ("1-in-100 daily loss — EVT/GPD estimate; falls back to Cornish-Fisher then normal",
+          "1/100概率最差日损失，优先使用EVT广义Pareto估计，次之CF修正")),
         ("cvar",     "CVaR (95%)",   "CVaR（95%）",
          _pct(metrics.get("cvar_95")),        _pct(prev_m.get("cvar_95")),
          ("Average loss in the worst 5% of outcomes (tail risk)",

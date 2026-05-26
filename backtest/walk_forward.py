@@ -76,6 +76,17 @@ def run_walk_forward(
       windows : list[dict] — per-window metrics
       summary : dict       — means across all windows + Δ(FF5 - hist)
     """
+    # ── Survivorship-bias warning ─────────────────────────────────────────────
+    # The universe is built from the *current* S&P 500 constituent list, which
+    # means companies that were members but later delisted (bankruptcy, M&A, etc.)
+    # are never fetched.  This overstates backtest returns vs live trading.
+    # A point-in-time constituent database (CRSP/Compustat) would be required
+    # to eliminate this bias entirely.
+    logger.warning(
+        "SURVIVORSHIP BIAS: universe contains only current S&P 500 members — "
+        "delisted/bankrupt stocks are excluded, OOS returns will be inflated."
+    )
+
     # ── Build aligned return matrix ───────────────────────────────────────────
     valid: dict[str, pd.Series] = {}
     for ticker, pd_obj in price_data.items():
@@ -86,7 +97,10 @@ def run_walk_forward(
         logger.warning("Walk-forward: fewer than 5 usable assets — aborting")
         return {}
 
-    ret_df = pd.concat(valid, axis=1).dropna()
+    # Keep all dates — do NOT dropna globally.  A single recently-listed stock
+    # would otherwise truncate the entire matrix to its IPO date.
+    # Per-window asset selection (below) handles date alignment safely.
+    ret_df = pd.concat(valid, axis=1)
     T      = len(ret_df)
     logger.info(
         f"Walk-forward universe: {len(ret_df.columns)} assets, {T} days "
@@ -108,14 +122,23 @@ def run_walk_forward(
         train_raw = ret_df.iloc[pos - train_days : pos]
         test_raw  = ret_df.iloc[pos             : pos + test_days]
 
-        # Keep only assets with sufficient training history in this window
-        good = [c for c in train_raw.columns if train_raw[c].count() >= min_history]
+        # Include only assets that were trading from the start of this training
+        # window (first 5 rows have data) AND have sufficient history.
+        # This prevents a recently-listed stock from truncating train.dropna()
+        # and silently shrinking the covariance estimation window.
+        good = [
+            c for c in train_raw.columns
+            if train_raw[c].count() >= min_history
+            and not train_raw[c].iloc[:5].isna().all()
+        ]
         if len(good) < 5:
             logger.debug(f"Window @{pos}: only {len(good)} assets with {min_history}d history — skipping")
             continue
 
         train = train_raw[good].dropna()
-        test  = test_raw[good].fillna(0.0)
+        # Test: carry forward last known price (handles intra-period halts);
+        # assets delisted during the test window retain their last return then 0.
+        test  = test_raw[good].ffill().fillna(0.0)
         n     = len(good)
 
         cov      = train.cov().values * 252
@@ -177,6 +200,9 @@ def run_walk_forward(
         "ff5_win_rate":        float(sum(
             w["ff5_sharpe"] > w["hist_sharpe"] for w in windows
         ) / len(windows)),
+        # Bias flags — consumers should display these prominently
+        "survivorship_bias":   True,   # universe = current S&P 500 members only
+        "lookahead_free":      True,   # FF5 factor premiums restricted to training window
     }
 
     logger.info(
@@ -208,4 +234,10 @@ def print_summary(summary: dict):
     print(f"  {'Mean Turnover':<22}  {w['ff5_mean_turnover']:>7.1%}  "
           f"{w['hist_mean_turnover']:>7.1%}")
     print(f"  {'FF5 wins':<22}  {w['ff5_win_rate']:>7.0%} of windows")
-    print("=" * 58 + "\n")
+    print("=" * 58)
+    if w.get("survivorship_bias"):
+        print("  [!] SURVIVORSHIP BIAS: universe = current S&P 500 only.")
+        print("      Delisted/bankrupt stocks excluded — returns overstated.")
+    if w.get("lookahead_free"):
+        print("  [OK] No look-ahead: FF5 premiums restricted to training window.")
+    print()
