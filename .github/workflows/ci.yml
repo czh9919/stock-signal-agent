@@ -39,7 +39,7 @@ jobs:
       - name: Import smoke test
         run: |
           python - <<'EOF'
-          from risk.optimizer    import compute_frontier, rebalancing_suggestions
+          from risk.optimizer    import compute_frontier, rebalancing_suggestions, ff_implied_mu
           from notify.chart      import risk_return_png
           from notify.report_gen import build_report
           from notify.mailer     import send_report

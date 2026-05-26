@@ -3,8 +3,11 @@ Markowitz mean-variance optimizer.
   compute_frontier()         — Monte Carlo cloud + max-Sharpe portfolio
   rebalancing_suggestions()  — 3-tier rebalancing vs optimal weights
   marginal_impact()          — portfolio impact of adding a candidate asset
+  ff_implied_mu()            — Fama-French 5-factor expected returns (replaces historical mean)
 """
 import logging
+import pickle
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -12,6 +15,75 @@ import pandas as pd
 from scipy.optimize import minimize
 
 logger = logging.getLogger(__name__)
+
+_FF5_FACTORS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+_FF5_CACHE   = Path("cache/ff5_daily.pkl")
+
+
+def _fetch_ff5() -> Optional[pd.DataFrame]:
+    """Download Fama-French 5-factor daily data from Ken French's library; cache for 20 h."""
+    import time
+    if _FF5_CACHE.exists() and (time.time() - _FF5_CACHE.stat().st_mtime) < 72000:
+        try:
+            with open(_FF5_CACHE, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+    try:
+        import pandas_datareader.data as web
+        raw = web.DataReader("F-F_Research_Data_5_Factors_2x3_daily", "famafrench")[0]
+        ff5 = raw / 100.0          # percent → decimal
+        _FF5_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_FF5_CACHE, "wb") as fh:
+            pickle.dump(ff5, fh)
+        logger.info(f"FF5 daily data downloaded: {len(ff5)} rows "
+                    f"({ff5.index[0].date()} – {ff5.index[-1].date()})")
+        return ff5
+    except Exception as exc:
+        logger.warning(f"FF5 fetch failed: {exc} — will fall back to historical mean")
+        return None
+
+
+def ff_implied_mu(ret_df: pd.DataFrame, rf: float = 0.035) -> np.ndarray:
+    """
+    Fama-French 5-factor implied annualised expected returns.
+
+    For each asset i:
+      excess_i = alpha_i + β₁·Mkt-RF + β₂·SMB + β₃·HML + β₄·RMW + β₅·CMA + ε
+      E[R_i]   = rf  +  (alpha_i + Σ βₖ · E[fₖ])  × 252
+
+    Factor premiums are taken from the full FF history (daily mean × 252) for
+    stability.  Alpha is included so stock-specific outperformance is captured.
+
+    Falls back to ret_df.mean() × 252 when FF data is unavailable or fewer
+    than 60 days align with the return series.
+    """
+    ff5 = _fetch_ff5()
+    if ff5 is None:
+        return ret_df.mean().values * 252
+
+    aligned = ret_df.join(ff5[_FF5_FACTORS + ["RF"]], how="inner")
+    if len(aligned) < 60:
+        logger.warning(f"Only {len(aligned)} days overlap with FF5 — using historical mean μ")
+        return ret_df.mean().values * 252
+
+    # Full-history annualised factor premiums (robust to recent-period noise)
+    factor_prem_ann = ff5[_FF5_FACTORS].mean().values * 252
+
+    X   = aligned[_FF5_FACTORS].values
+    X_c = np.column_stack([np.ones(len(X)), X])   # intercept + 5 factors
+
+    mu_out = np.empty(len(ret_df.columns))
+    for i, col in enumerate(ret_df.columns):
+        excess        = aligned[col].values - aligned["RF"].values
+        coeffs, *_    = np.linalg.lstsq(X_c, excess, rcond=None)
+        alpha_daily   = coeffs[0]
+        betas         = coeffs[1:]
+        mu_out[i]     = rf + alpha_daily * 252 + betas @ factor_prem_ann
+
+    logger.debug("FF5 μ: " + ", ".join(f"{c}={v:.3f}"
+                 for c, v in zip(ret_df.columns, mu_out)))
+    return mu_out
 
 
 def _stats(w: np.ndarray, mu: np.ndarray, cov: np.ndarray,
@@ -81,7 +153,7 @@ def compute_frontier(price_data: dict, holdings: list[dict],
         {t: price_data[t].returns for t in tickers}, axis=1
     ).dropna()
 
-    mu  = ret_df.mean().values * 252    # annualised expected return
+    mu  = ff_implied_mu(ret_df, rf)      # FF 5-factor implied expected return (annualised)
     cov = ret_df.cov().values  * 252    # annualised covariance
 
     # Current portfolio
@@ -222,7 +294,7 @@ def marginal_impact(
         return None
 
     n = len(tickers)
-    mu_all  = ret_df.mean().values * 252
+    mu_all  = ff_implied_mu(ret_df, rf)
     # Tikhonov regularisation: guards against near-singular covariance matrices
     cov_all = ret_df.cov().values * 252 + np.eye(n + 1) * 1e-8
 
