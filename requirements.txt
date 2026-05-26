@@ -12,5 +12,3 @@ python-dotenv>=1.0
 PyYAML>=6.0
 pandas-datareader>=0.10
 lxml>=4.9
-duckdb>=0.10
-vectorbt>=0.26

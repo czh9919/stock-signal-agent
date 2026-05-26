@@ -24,6 +24,10 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install optional dependencies
+        run: pip install vectorbt duckdb
+        continue-on-error: true
+
       - name: Install CJK fonts (fixes Chinese labels in matplotlib charts)
         run: |
           sudo apt-get install -y fonts-wqy-microhei
