@@ -19,10 +19,26 @@ from data.price_loader import PriceData
 
 logger = logging.getLogger(__name__)
 
-_SP500_CACHE     = Path("cache/sp500_tickers.pkl")
-_SP500_CACHE_TTL = 7 * 24 * 3600   # 1 week
-_PRICE_CACHE     = Path("cache/universe_prices.pkl")
-_PRICE_CACHE_TTL = 20 * 3600       # 20 h (same as FF5)
+_SP500_CACHE      = Path("cache/sp500_tickers.pkl")
+_SP500_COMPANIES  = Path("cache/sp500_companies.pkl")
+_SP500_CACHE_TTL  = 7 * 24 * 3600   # 1 week
+_PRICE_CACHE      = Path("cache/universe_prices.pkl")
+_PRICE_CACHE_TTL  = 20 * 3600       # 20 h (same as FF5)
+
+
+_WIKI_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-ai-bot/1.0)"}
+_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+
+def _fetch_sp500_table() -> pd.DataFrame:
+    """Scrape Wikipedia S&P 500 table; returns DataFrame with ticker/name/sector."""
+    import requests, io
+    html = requests.get(_WIKI_URL, headers=_WIKI_HEADERS, timeout=15).text
+    tables = pd.read_html(io.StringIO(html), attrs={"id": "constituents"})
+    df = tables[0][["Symbol", "Security", "GICS Sector"]].copy()
+    df.columns = ["ticker", "name", "sector"]
+    df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
+    return df
 
 
 def get_sp500_tickers() -> list[str]:
@@ -35,13 +51,8 @@ def get_sp500_tickers() -> list[str]:
             pass
 
     try:
-        tables  = pd.read_html(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-            attrs={"id": "constituents"},
-        )
-        tickers = (tables[0]["Symbol"]
-                   .str.replace(".", "-", regex=False)   # BRK.B → BRK-B
-                   .tolist())
+        df = _fetch_sp500_table()
+        tickers = df["ticker"].tolist()
         _SP500_CACHE.parent.mkdir(parents=True, exist_ok=True)
         with open(_SP500_CACHE, "wb") as f:
             pickle.dump(tickers, f)
@@ -50,6 +61,40 @@ def get_sp500_tickers() -> list[str]:
     except Exception as exc:
         logger.warning(f"SP500 list fetch failed: {exc}")
         return []
+
+
+def get_sp500_companies() -> list[dict]:
+    """Return [{ticker, name, sector}] for all S&P 500 constituents (cached 1 week)."""
+    if _SP500_COMPANIES.exists() and (time.time() - _SP500_COMPANIES.stat().st_mtime) < _SP500_CACHE_TTL:
+        try:
+            with open(_SP500_COMPANIES, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+    try:
+        df = _fetch_sp500_table()
+        companies = df.to_dict("records")
+        _SP500_COMPANIES.parent.mkdir(parents=True, exist_ok=True)
+        with open(_SP500_COMPANIES, "wb") as f:
+            pickle.dump(companies, f)
+        logger.info(f"S&P 500 companies: {len(companies)} entries cached")
+        return companies
+    except Exception as exc:
+        logger.warning(f"SP500 companies fetch failed: {exc}")
+        return []
+
+
+def search_sp500(query: str, limit: int = 20) -> list[dict]:
+    """Search S&P 500 by ticker or company name. Returns [{ticker, name, sector}]."""
+    q = query.strip().lower()
+    if not q:
+        return []
+    companies = get_sp500_companies()
+    results = [
+        c for c in companies
+        if q in c["ticker"].lower() or q in c["name"].lower()
+    ]
+    return results[:limit]
 
 
 def load_universe(

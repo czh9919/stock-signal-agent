@@ -53,8 +53,17 @@ def load_watchlist(path: str = "config/watchlist.csv") -> list[dict]:
 
 # ── Portfolio + Factor pipeline ────────────────────────────────────────────────
 
-def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
+def run_portfolio_pipeline(run_mode: str = "full", config: dict = None, on_log=None):
     logger = logging.getLogger("portfolio")
+
+    if on_log:
+        class _WSHandler(logging.Handler):
+            def emit(self, record):
+                on_log(self.format(record))
+        _h = _WSHandler()
+        _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(_h)
+
     logger.info(f"=== Portfolio Risk System — run_mode={run_mode} ===")
 
     thresholds = load_yaml("config/thresholds.yaml")
@@ -91,7 +100,7 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
 
     if run_mode == "alert_check":
         logger.info("alert_check — skipping full report")
-        return
+        return {"metrics": metrics, "html_en": "", "html_zh": ""}
 
     # ── Fama-French 5-factor analysis ─────────────────────────────────────────
     from risk.optimizer        import fetch_ff5
@@ -290,6 +299,7 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None):
     mailer.send_report(html_en, html_zh, rag=metrics["overall_rag"],
                        chart_en=chart_en, chart_zh=chart_zh)
     logger.info("=== Portfolio pipeline complete ===")
+    return {"metrics": metrics, "html_en": html_en, "html_zh": html_zh}
 
 
 # ── Backtest pipeline ──────────────────────────────────────────────────────────

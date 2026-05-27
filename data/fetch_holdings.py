@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 _RETRY = 3
 _TIMEOUT = 15
 
+# Brokers sometimes keep stale tickers after corporate events (spin-offs, delistings,
+# relistings).  Map old → current ticker so price fetching and risk calculations work.
+_TICKER_REMAP: dict[str, str] = {
+    "YNDX": "NBIS",   # Yandex → Nebius Group (relisted as NBIS on NASDAQ, Oct 2024)
+}
+
 
 def _get(url: str, headers: dict = None, retries: int = _RETRY) -> Optional[requests.Response]:
     for attempt in range(1, retries + 1):
@@ -240,6 +246,17 @@ def fetch_etoro(fx_rates: dict) -> list[dict]:
 def fetch_all_holdings(fx_rates: dict) -> list[dict]:
     """Fetch from all three platforms, merge, compute weights."""
     holdings = fetch_ibkr(fx_rates) + fetch_t212(fx_rates) + fetch_etoro(fx_rates)
+
+    # Apply ticker remapping for corporate events (delistings, relistings, renames)
+    for h in holdings:
+        old = h.get("ticker", "")
+        new = _TICKER_REMAP.get(old)
+        if new:
+            logger.info(f"Remapping {old} → {new} ({h.get('platform', '?')})")
+            h["ticker"] = new
+            # Only update description when it echoes the old ticker (broker-provided name)
+            if h.get("description") == old:
+                h["description"] = new
 
     total_nav = sum(h["market_value_eur"] for h in holdings)
     for h in holdings:

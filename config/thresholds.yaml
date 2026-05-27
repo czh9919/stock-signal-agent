@@ -10,7 +10,7 @@ alerts:
     label_en: "CVaR/VaR ratio"
     label_zh: "CVaR/VaR 比率"
   max_drawdown:
-    threshold: 0.20
+    threshold: 0.50
     severity: HIGH
     label_en: "Max Drawdown"
     label_zh: "最大回撤"
@@ -20,12 +20,12 @@ alerts:
     label_en: "Single Position Weight"
     label_zh: "单仓权重"
   single_day_loss:
-    threshold: 0.03
+    threshold: 0.1
     severity: HIGH
     label_en: "Single-Day Loss"
     label_zh: "单日跌幅"
   hhi:
-    threshold: 0.25
+    threshold: 0.5
     severity: MED
     label_en: "HHI Concentration"
     label_zh: "HHI 集中度"
