@@ -27,7 +27,7 @@ def setup_logging(level: str = "INFO", log_file: str = "logs/agent.log"):
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO), format=fmt,
         handlers=[
-            logging.StreamHandler(sys.stdout),
+            logging.StreamHandler(stream=open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False)),
             logging.FileHandler(log_file, encoding="utf-8"),
         ],
     )

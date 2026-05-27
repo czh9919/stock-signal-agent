@@ -225,15 +225,22 @@ def compute_frontier(price_data: dict, holdings: list[dict],
         logger.info("Frontier: fewer than 2 equity positions with price history — skipping")
         return {}
 
-    tickers = [h["ticker"] for h in valid]
-    w_cur   = np.array([h["weight"] for h in valid])
+    # Deduplicate: same ticker can appear across brokers — combine weights
+    w_map: dict[str, float] = {}
+    for h in valid:
+        t = h["ticker"]
+        w_map[t] = w_map.get(t, 0.0) + h["weight"]
+
+    ret_df = pd.concat(
+        {t: price_data[t].returns for t in w_map}, axis=1
+    ).dropna()
+
+    # Sync tickers/weights to actual ret_df columns after dropna
+    tickers = ret_df.columns.tolist()
+    w_cur   = np.array([w_map.get(t, 0.0) for t in tickers])
     w_sum   = w_cur.sum()
     if w_sum > 1e-9:
         w_cur = w_cur / w_sum  # re-normalise to equity-only weights
-
-    ret_df = pd.concat(
-        {t: price_data[t].returns for t in tickers}, axis=1
-    ).dropna()
 
     mu  = ff_implied_mu(ret_df, rf)      # FF 5-factor implied expected return (annualised)
     cov = ret_df.cov().values  * 252    # annualised covariance
@@ -366,20 +373,31 @@ def marginal_impact(
     if not valid:
         return None
 
-    tickers = [h["ticker"] for h in valid]
-    w_cur   = np.array([h["weight"] for h in valid])
-    if w_cur.sum() > 1e-9:
-        w_cur = w_cur / w_cur.sum()
+    # Deduplicate: same ticker across brokers — combine weights
+    w_map: dict[str, float] = {}
+    for h in valid:
+        t = h["ticker"]
+        w_map[t] = w_map.get(t, 0.0) + h["weight"]
 
-    # Align returns: existing equity holdings + candidate
-    ret_dict = {t: price_data[t].returns for t in tickers}
+    # Align returns: existing equity holdings (deduped) + candidate
+    ret_dict = {t: price_data[t].returns for t in w_map}
     ret_dict[candidate_ticker] = candidate_pd.returns
     ret_df = pd.concat(ret_dict, axis=1).dropna()
     if len(ret_df) < 21:
         logger.info(f"marginal_impact {candidate_ticker}: only {len(ret_df)} aligned days — skipping")
         return None
 
-    n = len(tickers)
+    # Sync to actual columns; candidate is always last
+    all_cols   = ret_df.columns.tolist()
+    base_cols  = [c for c in all_cols if c != candidate_ticker]
+    n          = len(base_cols)
+    w_cur      = np.array([w_map.get(t, 0.0) for t in base_cols])
+    if w_cur.sum() > 1e-9:
+        w_cur = w_cur / w_cur.sum()
+
+    # Reorder ret_df so candidate is last column
+    ret_df = ret_df[base_cols + [candidate_ticker]]
+
     mu_all  = ff_implied_mu(ret_df, rf)
     # Tikhonov regularisation: guards against near-singular covariance matrices
     cov_all = ret_df.cov().values * 252 + np.eye(n + 1) * 1e-8
@@ -413,7 +431,7 @@ def marginal_impact(
         suggested_weight = float(best_w_c)
 
     # Correlation of candidate to current equity portfolio
-    port_ret = (ret_df.iloc[:, :n] * w_cur).sum(axis=1)
+    port_ret = (ret_df[base_cols] * w_cur).sum(axis=1)
     corr     = float(port_ret.corr(ret_df[candidate_ticker]))
 
     return {

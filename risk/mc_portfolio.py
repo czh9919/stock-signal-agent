@@ -93,21 +93,33 @@ def run_mc_portfolio(
         logger.warning("MC portfolio: fewer than 2 equity positions with data — skipping")
         return {}
 
-    tickers = [h["ticker"] for h in valid]
-    mv_eur  = np.array([h.get("market_value_eur", 0.0) for h in valid], dtype=float)
+    # Deduplicate: same ticker can appear across brokers — combine market values
+    mv_map: dict[str, float] = {}
+    h_map:  dict[str, dict]  = {}
+    for h in valid:
+        t = h["ticker"]
+        mv_map[t] = mv_map.get(t, 0.0) + h.get("market_value_eur", 0.0)
+        if t not in h_map:
+            h_map[t] = h
+
+    # Build aligned returns DataFrame (dict keys already unique)
+    ret_df = pd.concat(
+        {t: price_data[t].returns for t in mv_map}, axis=1
+    ).dropna()
+    if len(ret_df) < 60:
+        logger.warning(f"MC portfolio: only {len(ret_df)} aligned days — skipping")
+        return {}
+
+    # Sync tickers/weights to actual ret_df columns
+    tickers = ret_df.columns.tolist()
+    mv_eur  = np.array([mv_map.get(t, 0.0) for t in tickers], dtype=float)
     nav0    = float(mv_eur.sum())
     if nav0 <= 0:
         return {}
 
     w0 = mv_eur / nav0   # static portfolio weights
-
-    # ── Build aligned returns DataFrame ──────────────────────────────────────
-    ret_df = pd.concat(
-        {t: price_data[t].returns for t in tickers}, axis=1
-    ).dropna()
-    if len(ret_df) < 60:
-        logger.warning(f"MC portfolio: only {len(ret_df)} aligned days — skipping")
-        return {}
+    # Rebuild valid list to match deduplicated tickers (used in cost/CGT overlay)
+    valid = [h_map[t] for t in tickers]
 
     mu = ff_implied_mu(ret_df, cfg["rf"])
 

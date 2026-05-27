@@ -105,28 +105,38 @@ def run_monte_carlo(price_data: dict, holdings: list[dict], nav_eur: float,
     if not valid:
         return {}
 
-    tickers = [h["ticker"] for h in valid]
-    weights = np.array([h["weight"] for h in valid])
+    # Deduplicate: same ticker can appear in multiple brokers — sum their weights
+    w_map: dict[str, float] = {}
+    for h in valid:
+        t = h["ticker"]
+        w_map[t] = w_map.get(t, 0.0) + h["weight"]
 
     # EWMA covariance
     ret_df = pd.concat(
-        {t: price_data[t].returns.tail(corr_window) for t in tickers}, axis=1
+        {t: price_data[t].returns.tail(corr_window) for t in w_map}, axis=1
     ).dropna()
 
     if ret_df.shape[0] < 5 or ret_df.shape[1] < 1:
         return {}
 
+    # Sync tickers/weights to ret_df columns (dropna may drop cols with all-NaN)
+    tickers = ret_df.columns.tolist()
+    weights = np.array([w_map.get(t, 0.0) for t in tickers])
+    if weights.sum() > 1e-9:
+        weights = weights / weights.sum()
+    n = len(tickers)
+
     cov = ret_df.cov().values
 
     try:
-        L = np.linalg.cholesky(cov + np.eye(len(tickers)) * 1e-8)
+        L = np.linalg.cholesky(cov + np.eye(n) * 1e-8)
     except np.linalg.LinAlgError:
-        cov += np.eye(len(tickers)) * 1e-6
+        cov += np.eye(n) * 1e-6
         L   = np.linalg.cholesky(cov)
 
     # Simulate
     rng        = np.random.default_rng(42)
-    z          = rng.standard_normal((paths, horizon, len(tickers)))
+    z          = rng.standard_normal((paths, horizon, n))
     daily_rets = z @ L.T  # (paths, horizon, n_assets)
     port_rets  = (daily_rets * weights).sum(axis=2)  # (paths, horizon)
     cum_rets   = (1 + port_rets).prod(axis=1) - 1     # (paths,)
