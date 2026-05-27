@@ -43,5 +43,11 @@ factor_model:
   min_window_days: 63     # skip ticker if aligned days < this
 
 paper_trade:
-  universe_size: 50       # total tickers screened (watchlist + random S&P 500 fill)
-  max_position_pct: 0.15  # max paper-account equity per position
+  universe_size: 50        # total tickers screened (watchlist + random S&P 500 fill)
+  max_position_pct: 0.15   # hard cap: max equity fraction per single position
+  # ── Risk gates (checked before opening any new position) ──────────────────
+  max_positions: 10        # halt new buys once this many open positions exist
+  var_limit_pct: 0.05      # halt new buys if portfolio 1-day EWMA VaR_95 > 5%
+  max_portfolio_beta: 1.5  # halt new buys if portfolio beta vs SPY > this
+  max_drawdown_halt: 0.10  # halt new buys if equity fell > 10% from starting_equity
+  starting_equity: 100000  # Alpaca paper account starting equity (USD)

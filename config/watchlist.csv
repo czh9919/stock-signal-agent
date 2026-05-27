@@ -1,24 +1,24 @@
-ticker,weight,notes,asset_class,currency
-AAPL,1.0,Apple Inc,equity,USD
-MSFT,1.0,Microsoft Corp,equity,USD
-NVDA,1.0,NVIDIA Corp,equity,USD
-TSLA,1.0,Tesla Inc,equity,USD
-AMZN,1.0,Amazon.com Inc,equity,USD
-GOOGL,1.0,Alphabet Inc,equity,USD
-META,1.0,Meta Platforms,equity,USD
-SPY,1.0,S&P 500 ETF,equity,USD
-QQQ,1.0,Nasdaq 100 ETF,equity,USD
-NBIS,1.0,Nebius Group,equity,USD
-AMD,1.0,Advanced Micro Devices,equity,USD
-TLT,1.0,iShares 20+ Year Treasury Bond ETF,bond,USD
-IEF,1.0,iShares 7-10 Year Treasury Bond ETF,bond,USD
-AGG,1.0,iShares Core U.S. Aggregate Bond ETF,bond,USD
-GLD,1.0,SPDR Gold Shares,gold,USD
-INTC,1.0,Intel,equity,USD
+ticker,weight,notes,asset_class,currency
+AAPL,1.0,Apple Inc,equity,USD
+MSFT,1.0,Microsoft Corp,equity,USD
+NVDA,1.0,NVIDIA Corp,equity,USD
+TSLA,1.0,Tesla Inc,equity,USD
+AMZN,1.0,Amazon.com Inc,equity,USD
+GOOGL,1.0,Alphabet Inc,equity,USD
+META,1.0,Meta Platforms,equity,USD
+SPY,1.0,S&P 500 ETF,equity,USD
+QQQ,1.0,Nasdaq 100 ETF,equity,USD
+NBIS,1.0,Nebius Group,equity,USD
+AMD,1.0,Advanced Micro Devices,equity,USD
+TLT,1.0,iShares 20+ Year Treasury Bond ETF,bond,USD
+IEF,1.0,iShares 7-10 Year Treasury Bond ETF,bond,USD
+AGG,1.0,iShares Core U.S. Aggregate Bond ETF,bond,USD
+GLD,1.0,SPDR Gold Shares,gold,USD
+INTC,1.0,Intel,equity,USD
 GOOG,1.0,FF5 signal=BUY t=2.3 IR=2.62 [2026-05-27],equity,USD
-KKR,1.0,FF5 signal=SELL t=-1.8 IR=-2.01 [2026-05-27],equity,USD
-IT,1.0,FF5 signal=SELL t=-2.0 IR=-2.22 [2026-05-27],equity,USD
-CPRT,1.0,FF5 signal=SELL t=-2.7 IR=-3.04 [2026-05-27],equity,USD
-GIS,1.0,FF5 signal=SELL t=-1.8 IR=-1.98 [2026-05-27],equity,USD
-CTAS,1.0,FF5 signal=SELL t=-2.0 IR=-2.27 [2026-05-27],equity,USD
-FISV,1.0,FF5 signal=SELL t=-2.1 IR=-2.34 [2026-05-27],equity,USD
+LITE,1.0,FF5 signal=BUY t=3.2 IR=3.63 [2026-05-28],equity,USD
+MKC,1.0,FF5 signal=SELL t=-1.5 IR=-1.68 [2026-05-28],equity,USD
+BX,1.0,FF5 signal=SELL t=-1.6 IR=-1.78 [2026-05-28],equity,USD
+AVB,1.0,FF5 signal=SELL t=-1.8 IR=-1.96 [2026-05-28],equity,USD
+TTD,1.0,FF5 signal=SELL t=-1.8 IR=-2.04 [2026-05-28],equity,USD
+ROP,1.0,FF5 signal=SELL t=-2.4 IR=-2.69 [2026-05-28],equity,USD

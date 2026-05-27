@@ -76,7 +76,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add config/watchlist.csv
           git diff --staged --quiet \
-            || git commit -m "chore: FF5 paper-trade promotes new tickers to watchlist [skip ci]" \
+            || git commit -m "chore: FF5 paper-trade updates watchlist (promote/prune) [skip ci]" \
             && git push
 
       # Persist cache for next run
