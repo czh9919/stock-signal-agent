@@ -217,31 +217,20 @@ _ETORO_TICKER_MAP: dict[str, str] = {
 }
 
 
-def _load_etoro_csv() -> list[dict]:
-    """Load eToro holdings from config/etoro_holdings.csv (manual fallback)."""
+def _load_etoro_csv(fx_rates: dict = None) -> list[dict]:
+    """
+    Load eToro holdings from config/etoro_holdings.csv.
+    CSV stores quantity + cost_basis_eur; market value is computed live
+    from yfinance so it stays current without manual updates.
+    """
     import csv
+    import yfinance as yf
     path = _ETORO_CSV
+    fx = fx_rates or {}
+
     try:
         with open(path, newline="", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
-        holdings = []
-        for row in rows:
-            ticker = row.get("ticker", "").strip()
-            if not ticker:
-                continue
-            holdings.append({
-                "ticker":            ticker,
-                "description":       row.get("description", ticker).strip(),
-                "asset_class":       row.get("asset_class", "equity").strip(),
-                "platform":          "eToro",
-                "quantity":          1,
-                "cost_basis_eur":    float(row.get("cost_basis_eur", 0)),
-                "market_value_eur":  float(row.get("market_value_eur", 0)),
-                "unrealised_pnl_eur":float(row.get("unrealised_pnl_eur", 0)),
-                "currency":          row.get("currency", "EUR").strip(),
-            })
-        logger.info(f"eToro: {len(holdings)} positions loaded from {path}")
-        return holdings
     except FileNotFoundError:
         logger.info(f"eToro: {path} not found — no manual holdings")
         return []
@@ -249,17 +238,66 @@ def _load_etoro_csv() -> list[dict]:
         logger.error(f"eToro: CSV parse failed: {e}")
         return []
 
+    if not rows:
+        return []
+
+    # Batch-fetch latest prices for all tickers in the CSV
+    tickers = [r["ticker"].strip() for r in rows if r.get("ticker", "").strip()]
+    try:
+        raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
+        if hasattr(raw.columns, "levels"):
+            close_df = raw["Close"]
+        else:
+            close_df = raw[["Close"]].rename(columns={"Close": tickers[0]})
+        latest = {t: float(close_df[t].dropna().iloc[-1])
+                  for t in tickers if t in close_df.columns and not close_df[t].dropna().empty}
+    except Exception as e:
+        logger.warning(f"eToro: live price fetch failed ({e}) — market values will be zero")
+        latest = {}
+
+    holdings = []
+    for row in rows:
+        ticker = row.get("ticker", "").strip()
+        if not ticker:
+            continue
+        currency     = row.get("currency", "USD").strip()
+        rate         = fx.get(f"{currency}EUR", 0.92 if currency == "USD" else 1.0)
+        qty          = float(row.get("quantity", 0))
+        cost_eur     = float(row.get("cost_basis_eur", 0))
+        price_native = latest.get(ticker)
+
+        if price_native is not None:
+            mv_eur = price_native * rate * qty
+        else:
+            logger.warning(f"eToro CSV: no live price for {ticker} — market value unavailable")
+            mv_eur = 0.0
+
+        holdings.append({
+            "ticker":            ticker,
+            "description":       row.get("description", ticker).strip(),
+            "asset_class":       row.get("asset_class", "equity").strip(),
+            "platform":          "eToro",
+            "quantity":          qty,
+            "cost_basis_eur":    cost_eur,
+            "market_value_eur":  mv_eur,
+            "unrealised_pnl_eur":mv_eur - cost_eur,
+            "currency":          currency,
+        })
+
+    logger.info(f"eToro: {len(holdings)} positions loaded from {path} (live prices)")
+    return holdings
+
 
 def fetch_etoro(fx_rates: dict) -> list[dict]:
     key = os.environ.get("ETORO_API_KEY")
     if not key:
         logger.info("ETORO_API_KEY not set — loading eToro from CSV fallback")
-        return _load_etoro_csv()
+        return _load_etoro_csv(fx_rates)
 
     r = _get(_ETORO_BASE, headers={"AccountType": "Real", "Authorization": f"Bearer {key}"})
     if r is None:
         logger.warning("eToro API unreachable — falling back to CSV")
-        return _load_etoro_csv()
+        return _load_etoro_csv(fx_rates)
 
     holdings = []
     try:
@@ -283,11 +321,11 @@ def fetch_etoro(fx_rates: dict) -> list[dict]:
             })
     except Exception as e:
         logger.error(f"eToro API parse failed: {e} — falling back to CSV")
-        return _load_etoro_csv()
+        return _load_etoro_csv(fx_rates)
 
     if not holdings:
         logger.warning("eToro API returned empty portfolio — falling back to CSV")
-        return _load_etoro_csv()
+        return _load_etoro_csv(fx_rates)
 
     logger.info(f"eToro: {len(holdings)} positions loaded from API")
     return holdings
