@@ -1,0 +1,4 @@
+ticker,description,asset_class,market_value_eur,cost_basis_eur,unrealised_pnl_eur,currency
+MAGS,MAG-7 Smart Portfolio (proxy: MAGS ETF),equity,4966.84,4288.88,677.96,EUR
+NBIS,Nebius Group,equity,3904.23,2155.75,1748.48,EUR
+GLD,Gold (proxy: GLD ETF),gold,840.75,946.22,-105.47,EUR
