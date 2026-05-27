@@ -1,7 +1,7 @@
-# Portfoli Risk Agent
-An automated portfolio risk and factor analysis system. A single unified pipeline fetches live broker holdings, runs Fama-French 5-factor regressions on every watchlist stock, computes a full risk dashboard, and delivers a bilingual (English + Chinese) HTML email report after each US market close.
+# Portfolio Risk Agent
+An automated portfolio risk, factor analysis, and paper trading system. A single unified pipeline fetches live broker holdings, runs Fama-French 5-factor regressions on every watchlist stock, computes a full risk dashboard, delivers a bilingual (English + Chinese) HTML email report after each US market close, and optionally executes paper trades on Alpaca Markets.
 
-All trading decisions remain manual. The system exists to give you clean, quantitative input for those decisions.
+All live trading decisions remain manual. The system provides clean quantitative input and a paper trading sandbox for strategy validation.
 
 ---
 
@@ -110,6 +110,7 @@ Set via the `RUN_MODE` environment variable:
 | `portfolio` | Manual / local | Portfolio risk report only; skips watchlist factor ranking |
 | `alert_check` | 14:00 (09:00 ET, pre-market) | Threshold check only; fires alert emails when a metric is RED; no report |
 | `backtest` | Manual | Walk-forward validation — FF5 μ vs historical mean μ in Markowitz |
+| `paper_trade` | 22:00 Mon–Fri (after daily_run) | Screen 50-ticker universe, prune/promote watchlist, execute Alpaca paper orders |
 
 ---
 
@@ -127,6 +128,12 @@ Set via the `RUN_MODE` environment variable:
 | `cache.py` | **Atomic** JSON snapshot writes (`.tmp` → rename); corrupt-file recovery; staleness warning when fallback snapshot is > 2 days old; 7-day rolling retention |
 | `spy_universe.py` | Scrapes current S&P 500 tickers from Wikipedia; bulk yfinance download for walk-forward universe; 20h price cache |
 
+### `brokers/`
+
+| File | Role |
+|---|---|
+| `alpaca.py` | Alpaca Markets paper trading REST client: `get_account`, `get_positions`, `place_order`, `close_position`, `get_latest_price`. Paper base URL; requires `ALPACA_API_KEY` + `ALPACA_SECRET_KEY`. |
+
 ### `strategy/`
 
 | File | Role |
@@ -137,6 +144,7 @@ Set via the `RUN_MODE` environment variable:
 | `factor_ortho.py` | **Factor collinearity diagnostics**: `check_factor_collinearity` — pairwise correlations, VIF per factor, condition number of the FF5 correlation matrix, and high-correlation pair flagging (|r|>0.4). Warns when VIF>5, condition number>10, or any high-corr pair is found. |
 | `ic_analysis.py` | **Cross-sectional IC analysis**: `compute_universe_ic` — rolling Spearman rank-IC between predicted alpha ranks (estimated over a 126-day training window) and realised forward returns, aggregated over 8 evaluation periods. Reports IC mean, IC-IR (annualised), t-stat, and p-value. `compute_alpha_decay` — hit rate of the alpha signal direction across 5/21/63/126-day horizons for a single ticker. |
 | `weight_allocator.py` | **Risk-constrained weight allocation**: `compute_signal_weights` — converts robust BUY signals (PSR≥65%, IR_deflated>0) into portfolio weights using score = PSR × deflated IR × consistency boost; caps each position at 20%; iteratively redistributes excess to uncapped positions; flags portfolio-level FF5 factor exposures exceeding 1.5×. |
+| `paper_engine.py` | **Paper trading pipeline**: universe expansion (permanent watchlist + date-seeded random S&P 500 fill to 50 tickers), FF5 screening, watchlist pruning (Rule A: SELL signal; Rule B: HOLD > 30 days), watchlist promotion, portfolio risk snapshot (EWMA VaR, beta vs SPY, HHI), pre-trade risk gates, IR-proportional order sizing, Alpaca order execution. |
 
 ### `backtest/`
 
@@ -354,6 +362,44 @@ Current candidates in `config/watchlist.csv`: TLT, IEF, AGG (Treasuries), GLD.
 
 ---
 
+## Paper Trading (`RUN_MODE=paper_trade`)
+
+Runs nightly at 22:00 UTC via `.github/workflows/paper_trade.yml`, 30 minutes after the full daily pipeline. Completely isolated from the portfolio risk pipeline — no shared state beyond the shared watchlist and FF5 price cache.
+
+### Pipeline
+
+1. **Universe expansion** — current watchlist equities (permanent) + date-seeded random S&P 500 fill up to `universe_size` (default 50) total tickers. Same seed per day → reproducible within a day.
+2. **FF5 screening** — runs `run_factor_regression` + `compute_robust_signal` on every ticker; sorts by IR descending.
+3. **Watchlist pruning** — removes auto-promoted tickers only (identified by `FF5 signal=` prefix in the `notes` field):
+   - **Rule A**: current signal is SELL → remove immediately
+   - **Rule B**: current signal is not BUY AND entry is older than 30 days (date parsed from `[YYYY-MM-DD]` in notes) → remove
+   - Manual entries are **never touched**
+4. **Watchlist promotion** — S&P 500 candidates with a BUY or SELL signal are appended to `watchlist.csv` (idempotent; skips existing tickers). Promoted entries have notes formatted as `FF5 signal=BUY t=X IR=Y [YYYY-MM-DD]` — this is what distinguishes them from manual entries.
+5. **Portfolio risk snapshot** — computed from current Alpaca positions:
+   - EWMA covariance (λ=0.94) → 1-day VaR_95
+   - CAPM beta vs SPY
+   - HHI (position concentration)
+6. **Pre-trade risk gates** — checked before opening any new position (SELL/close orders bypass all gates):
+
+   | Gate | Default threshold |
+   |---|---|
+   | Max open positions | 10 |
+   | Portfolio 1-day VaR_95 | > 5% |
+   | Portfolio beta vs SPY | > 1.5× |
+   | Equity drawdown from `starting_equity` | > 10% |
+
+7. **IR-proportional order sizing** — each new BUY receives `equity × (IR_i / ΣIR)`, capped at `max_position_pct` (15%). Higher-conviction names (higher IR) get a larger slice. Unfilled capacity stays as cash.
+
+### Watchlist auto-management
+
+The promoted/pruned state is committed back to `watchlist.csv` by GitHub Actions after each run (`[skip ci]`). The full daily pipeline (`RUN_MODE=full`) picks up newly promoted tickers on its next run.
+
+### Configuration
+
+All thresholds live in `config/settings.yaml` under `paper_trade:` — no code change needed to tune them.
+
+---
+
 ## Walk-Forward Backtest
 
 `RUN_MODE=backtest` runs a rolling walk-forward validation:
@@ -430,6 +476,7 @@ GLD,1.0,SPDR Gold Shares,gold,USD
 - `asset_class=equity` rows are included in the FF5 factor ranking
 - `asset_class=bond` and `gold` rows are evaluated as diversification candidates
 - `notes` becomes the display name in the candidates table
+- Rows with `notes` starting with `FF5 signal=` are auto-promoted by the paper trading engine and may be auto-pruned; all other rows are treated as manual and never auto-removed
 
 ---
 
@@ -449,6 +496,15 @@ monte_carlo:
   n_paths:  50000
   horizon:  21
   model:    hawkes   # hawkes | garch | gbm
+
+paper_trade:
+  universe_size: 50        # permanent watchlist + random S&P 500 fill
+  max_position_pct: 0.15   # hard cap per position (fraction of equity)
+  max_positions: 10        # halt new buys above this count
+  var_limit_pct: 0.05      # halt new buys if portfolio VaR_95 > 5%
+  max_portfolio_beta: 1.5  # halt new buys if portfolio beta > 1.5
+  max_drawdown_halt: 0.10  # halt new buys if equity down > 10% from starting_equity
+  starting_equity: 100000  # Alpaca paper account starting equity (USD)
 ```
 
 ### `config/thresholds.yaml`
@@ -491,6 +547,16 @@ EWMA lambda (0.94), GARCH parameters, lookback windows, ECB risk-free rate (3.5%
 
 If all broker APIs fail the pipeline falls back to the most recent local snapshot in `cache/`.
 
+### Paper Trading (Alpaca — free)
+
+| Variable | Purpose |
+|---|---|
+| `ALPACA_API_KEY` | Alpaca paper trading key ID |
+| `ALPACA_SECRET_KEY` | Alpaca paper trading secret key |
+| `PAPER_DRY_RUN` | `true` → screen only, no orders placed (default `false`) |
+
+Paper trading is skipped gracefully if these are not set (screening still runs).
+
 ---
 
 ## Quick Start (local)
@@ -515,7 +581,13 @@ RUN_MODE=alert_check python main.py
 # 6. Walk-forward backtest
 RUN_MODE=backtest python main.py
 
-# 7. Local scheduler (full pipeline 21:30 UTC, alerts every 4h)
+# 7. Paper trade (dry-run — screen only, no Alpaca orders)
+PAPER_DRY_RUN=true RUN_MODE=paper_trade python main.py
+
+# 8. Paper trade (real — places Alpaca paper orders)
+RUN_MODE=paper_trade python main.py
+
+# 9. Local scheduler (full pipeline 21:30 UTC, alerts every 4h)
 python scheduler.py
 ```
 
@@ -528,6 +600,7 @@ python scheduler.py
 | File | Trigger | What it does |
 |---|---|---|
 | `daily_run.yml` | Cron × 2/day + manual dispatch | Resolves `RUN_MODE` from UTC hour; runs `main.py`; sends bilingual report |
+| `paper_trade.yml` | Cron 22:00 UTC Mon–Fri + manual dispatch | Paper trading pipeline; commits updated `watchlist.csv` back to repo |
 | `ci.yml` | Push/PR to main or master | Syntax-checks all Python files; import smoke test including factor model, attribution, decision trace, and report section assertions |
 
 ### Cron Schedule
@@ -536,6 +609,7 @@ python scheduler.py
 |---|---|---|---|
 | 14:00 | 15:00 | 10:00 | `alert_check` |
 | 21:30 | 22:30 | 17:30 | `full` |
+| 22:00 | 23:00 | 18:00 | `paper_trade` |
 
 ### Setup
 

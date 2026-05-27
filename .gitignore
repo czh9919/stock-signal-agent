@@ -35,6 +35,9 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
-cache/alert_dedup.json
-cache/*.pkl
-cache/*.tmp
+
+# Runtime cache (snapshots, FF5 pickle, alert dedup — never commit)
+cache/
+
+# Vite build artifacts
+web/.vite/
