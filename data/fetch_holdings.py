@@ -241,16 +241,23 @@ def _load_etoro_csv(fx_rates: dict = None) -> list[dict]:
     if not rows:
         return []
 
-    # Batch-fetch latest prices for all tickers in the CSV
+    # Batch-fetch latest prices + live FX rates in one request
     tickers = [r["ticker"].strip() for r in rows if r.get("ticker", "").strip()]
+    fetch_symbols = tickers + ["EURUSD=X"]   # EUR/USD for USD→EUR conversion
     try:
-        raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
+        raw = yf.download(fetch_symbols, period="2d", auto_adjust=True, progress=False)
         if hasattr(raw.columns, "levels"):
             close_df = raw["Close"]
         else:
-            close_df = raw[["Close"]].rename(columns={"Close": tickers[0]})
+            close_df = raw[["Close"]].rename(columns={"Close": fetch_symbols[0]})
         latest = {t: float(close_df[t].dropna().iloc[-1])
-                  for t in tickers if t in close_df.columns and not close_df[t].dropna().empty}
+                  for t in fetch_symbols if t in close_df.columns and not close_df[t].dropna().empty}
+
+        # Derive live FX rates from the batch (override caller's values if fresher)
+        if "EURUSD=X" in latest:
+            fx = dict(fx)   # don't mutate caller's dict
+            fx["USDEUR"] = 1.0 / latest["EURUSD=X"]
+            logger.debug(f"eToro: live USD/EUR = {fx['USDEUR']:.4f}")
     except Exception as e:
         logger.warning(f"eToro: live price fetch failed ({e}) — market values will be zero")
         latest = {}
