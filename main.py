@@ -351,5 +351,12 @@ if __name__ == "__main__":
     if mode in ("portfolio", "full", "alert_check"):
         run_portfolio_pipeline(run_mode=mode, config=cfg)
 
-    if mode == "backtest":
+    elif mode == "backtest":
         run_backtest_pipeline(cfg)
+
+    elif mode == "paper_trade":
+        from strategy.paper_engine import run_paper_trade_pipeline
+        run_paper_trade_pipeline(cfg)
+
+    else:
+        logger.error(f"Unknown RUN_MODE: {mode!r}. Use: portfolio | full | alert_check | backtest | paper_trade")

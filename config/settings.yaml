@@ -41,3 +41,7 @@ monte_carlo:
 factor_model:
   window_days: 252        # OLS regression window; falls back to available days if fewer
   min_window_days: 63     # skip ticker if aligned days < this
+
+paper_trade:
+  universe_size: 50       # total tickers screened (watchlist + random S&P 500 fill)
+  max_position_pct: 0.15  # max paper-account equity per position

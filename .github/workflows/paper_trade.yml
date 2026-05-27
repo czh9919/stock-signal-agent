@@ -1,0 +1,87 @@
+name: Paper Trade
+
+# Runs at 22:00 UTC Mon-Fri — 30 min after daily_run (21:30 UTC) has finished.
+# Can also be triggered manually with an optional dry-run flag.
+
+on:
+  schedule:
+    - cron: '0 22 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — screen only, no Alpaca orders'
+        type: boolean
+        default: false
+
+jobs:
+  paper-trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write   # needed to commit promoted watchlist entries
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure cache dir exists
+        run: mkdir -p cache logs
+
+      # Reuse FF5 + SP500 caches written by daily_run (same cache key prefix)
+      - name: Restore persistent cache
+        uses: actions/cache@v4
+        with:
+          path: cache/
+          key: persist-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            persist-${{ runner.os }}-
+
+      - name: Run paper trade pipeline
+        env:
+          RUN_MODE: paper_trade
+          PAPER_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          # Alpaca paper trading
+          ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          # Broker reads (for NAV context — same as daily_run)
+          IBKR_FLEX_TOKEN:   ${{ secrets.IBKR_FLEX_TOKEN }}
+          IBKR_QUERY_ID:     ${{ secrets.IBKR_QUERY_ID }}
+          T212_API_KEY:      ${{ secrets.T212_API_KEY }}
+          T212_API_SECRET:   ${{ secrets.T212_API_SECRET }}
+          # Email (optional — for future paper trade reports)
+          SMTP_HOST:         ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:         ${{ secrets.SMTP_PORT }}
+          SMTP_USER:         ${{ secrets.SMTP_USER }}
+          SMTP_PASS:         ${{ secrets.SMTP_PASS }}
+          REPORT_TO_EMAIL:   ${{ secrets.REPORT_TO_EMAIL }}
+        run: python main.py
+
+      # Commit any newly promoted tickers back to the repo
+      - name: Commit promoted watchlist entries
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add config/watchlist.csv
+          git diff --staged --quiet \
+            || git commit -m "chore: FF5 paper-trade promotes new tickers to watchlist [skip ci]" \
+            && git push
+
+      # Persist cache for next run
+      - name: Save persistent cache
+        uses: actions/cache@v4
+        with:
+          path: cache/
+          key: persist-${{ runner.os }}-${{ github.run_id }}
