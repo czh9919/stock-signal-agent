@@ -90,6 +90,28 @@ class Storage:
                     logged_at  TEXT NOT NULL,
                     warning    TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS pipeline_runs (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_mode    TEXT NOT NULL,
+                    started_at  TEXT NOT NULL,
+                    finished_at TEXT,
+                    status      TEXT NOT NULL DEFAULT 'running',
+                    nav_eur     REAL,
+                    var_95_cf   REAL,
+                    sharpe      REAL,
+                    rag_status  TEXT,
+                    html_en     TEXT,
+                    html_zh     TEXT,
+                    error_msg   TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS price_snapshots (
+                    ticker      TEXT PRIMARY KEY,
+                    price       REAL,
+                    currency    TEXT,
+                    updated_at  TEXT
+                );
             """)
 
     # ── Price History ────────────────────────────────────────────────────────
@@ -219,6 +241,94 @@ class Storage:
                 "INSERT INTO data_quality_log (ticker,logged_at,warning) VALUES (?,?,?)",
                 (ticker, datetime.utcnow().isoformat(), warning),
             )
+
+    # ── Pipeline Runs ────────────────────────────────────────────────────────
+
+    def create_run(self, run_mode: str) -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO pipeline_runs (run_mode, started_at, status) VALUES (?, ?, 'running')",
+                (run_mode, datetime.utcnow().isoformat()),
+            )
+            return cur.lastrowid
+
+    def finish_run(self, run_id: int, metrics: dict, html_en: str = "", html_zh: str = ""):
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE pipeline_runs
+                   SET status='success', finished_at=?, nav_eur=?, var_95_cf=?,
+                       sharpe=?, rag_status=?, html_en=?, html_zh=?
+                   WHERE id=?""",
+                (
+                    datetime.utcnow().isoformat(),
+                    metrics.get("nav_eur"),
+                    metrics.get("var_95_cf"),
+                    metrics.get("sharpe"),
+                    metrics.get("overall_rag"),
+                    html_en, html_zh, run_id,
+                ),
+            )
+
+    def fail_run(self, run_id: int, error_msg: str):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE pipeline_runs SET status='failed', finished_at=?, error_msg=? WHERE id=?",
+                (datetime.utcnow().isoformat(), error_msg, run_id),
+            )
+
+    def get_runs(self, limit: int = 50) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT id, run_mode, started_at, finished_at, status,
+                          nav_eur, var_95_cf, sharpe, rag_status, error_msg
+                   FROM pipeline_runs ORDER BY id DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_run(self, run_id: int) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM pipeline_runs WHERE id=?", (run_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_run(self) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM pipeline_runs WHERE status='success' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_metric_history(self, limit: int = 90) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT finished_at, nav_eur, var_95_cf, sharpe, rag_status
+                   FROM pipeline_runs
+                   WHERE status='success' AND finished_at IS NOT NULL
+                   ORDER BY id DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    # ── Price Snapshots ──────────────────────────────────────────────────────
+
+    def upsert_price_snapshot(self, ticker: str, price: float, currency: str = "USD"):
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO price_snapshots (ticker, price, currency, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(ticker) DO UPDATE SET price=excluded.price,
+                   currency=excluded.currency, updated_at=excluded.updated_at""",
+                (ticker, price, currency, datetime.utcnow().isoformat()),
+            )
+
+    def get_price_snapshots(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT ticker, price, currency, updated_at FROM price_snapshots ORDER BY ticker"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Accuracy Report ──────────────────────────────────────────────────────
 

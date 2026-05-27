@@ -1,5 +1,4 @@
-# Stock AI Agent
-
+# Portfoli Risk Agent
 An automated portfolio risk and factor analysis system. A single unified pipeline fetches live broker holdings, runs Fama-French 5-factor regressions on every watchlist stock, computes a full risk dashboard, and delivers a bilingual (English + Chinese) HTML email report after each US market close.
 
 All trading decisions remain manual. The system exists to give you clean, quantitative input for those decisions.
