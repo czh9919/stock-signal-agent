@@ -174,11 +174,24 @@ def _trace_frontier(
             constraints=cons,
             options={"maxiter": 500, "ftol": 1e-12},
         )
-        if res.success:
-            w   = res.x
-            vol = float(np.sqrt(max(float(w @ cov @ w), 0.0)))
-            ret = float(w @ mu)
-            curve.append((vol, ret))
+        if not res.success:
+            continue
+
+        # SLSQP can violate bounds slightly — clip and renormalise strictly
+        w = np.clip(res.x, 0.0, 1.0)
+        w_sum = w.sum()
+        if w_sum < 1e-9:
+            continue
+        w = w / w_sum
+
+        # Accept only if the return constraint is actually satisfied
+        actual_ret = float(w @ mu)
+        tol = max(0.005, 0.03 * abs(target))
+        if abs(actual_ret - target) > tol:
+            continue
+
+        vol = float(np.sqrt(max(float(w @ cov @ w), 0.0)))
+        curve.append((vol, actual_ret))
 
     if not curve:
         return []
