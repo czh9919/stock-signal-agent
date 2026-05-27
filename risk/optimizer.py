@@ -132,6 +132,63 @@ def _max_sharpe(mu: np.ndarray, cov: np.ndarray,
     return None
 
 
+def _trace_frontier(
+    mu: np.ndarray,
+    cov: np.ndarray,
+    rf: float = 0.035,
+    n_points: int = 80,
+) -> list[tuple[float, float]]:
+    """
+    Parametric minimum-variance frontier: for each target return in
+    [min_asset_ret, max_asset_ret], solve the QP
+
+        min  w' Σ w
+        s.t. w' μ = target_ret,  w' 1 = 1,  w ≥ 0
+
+    Returns a list of (vol, ret) pairs tracing the hyperbolic boundary.
+    Only the *efficient* half (ret ≥ global-minimum-variance portfolio) is
+    returned, as the lower half is dominated and never optimal.
+    """
+    n = len(mu)
+    if n < 2:
+        return []
+
+    ret_lo = float(mu.min())
+    ret_hi = float(mu.max())
+    if ret_hi - ret_lo < 1e-6:
+        return []
+
+    curve: list[tuple[float, float]] = []
+    # Extra headroom above max individual return so the curve extends fully
+    for target in np.linspace(ret_lo, ret_hi * 1.05, n_points):
+        cons = [
+            {"type": "eq", "fun": lambda w, t=target: float(w @ mu) - t},
+            {"type": "eq", "fun": lambda w: float(w.sum()) - 1.0},
+        ]
+        w0  = np.ones(n) / n
+        res = minimize(
+            lambda w: float(w @ cov @ w),
+            w0,
+            method="SLSQP",
+            bounds=[(0.0, 1.0)] * n,
+            constraints=cons,
+            options={"maxiter": 500, "ftol": 1e-12},
+        )
+        if res.success:
+            w   = res.x
+            vol = float(np.sqrt(max(float(w @ cov @ w), 0.0)))
+            ret = float(w @ mu)
+            curve.append((vol, ret))
+
+    if not curve:
+        return []
+
+    # Keep only the efficient frontier: ret ≥ global-min-variance portfolio
+    min_vol_ret = min(curve, key=lambda p: p[0])[1]
+    efficient   = [(v, r) for v, r in curve if r >= min_vol_ret - 1e-6]
+    return sorted(efficient, key=lambda p: p[0])
+
+
 def compute_frontier(price_data: dict, holdings: list[dict],
                      rf: float = 0.035, n_mc: int = 1200) -> dict:
     """
@@ -177,7 +234,7 @@ def compute_frontier(price_data: dict, holdings: list[dict],
         for i, t in enumerate(tickers)
     ]
 
-    # Monte Carlo portfolios
+    # Monte Carlo portfolios (background cloud — shows full feasible set)
     rng = np.random.default_rng(42)
     mc_rows: list[tuple[float, float, float]] = []
     for _ in range(n_mc):
@@ -198,8 +255,12 @@ def compute_frontier(price_data: dict, holdings: list[dict],
     else:
         logger.warning("Max-Sharpe portfolio could not be computed")
 
+    # Efficient frontier curve: min-variance portfolio at each target return
+    frontier_curve = _trace_frontier(mu, cov, rf, n_points=80)
+
     return {
-        "mc":      mc_rows,
+        "mc":             mc_rows,
+        "frontier_curve": frontier_curve,   # list of (vol, ret) — the hyperbola
         "current": {
             "vol": cur_vol, "ret": cur_ret, "sharpe": cur_sharpe,
             "weights": {t: float(w_cur[i]) for i, t in enumerate(tickers)},

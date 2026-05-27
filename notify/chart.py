@@ -62,7 +62,8 @@ def _render(frontier: dict, lang: str, plt, fm) -> bytes:
         "y":       "年化收益率 E(R)" if is_zh else "Annualised Return E(R)",
         "current": "当前" if is_zh else "Current",
         "optimal": "最优" if is_zh else "Optimal",
-        "sharpe":  "夏普比率" if is_zh else "Sharpe Ratio",
+        "sharpe":   "夏普比率" if is_zh else "Sharpe Ratio",
+        "frontier": "有效前沿" if is_zh else "Efficient Frontier",
     }
 
     with plt.rc_context(rc):
@@ -70,17 +71,25 @@ def _render(frontier: dict, lang: str, plt, fm) -> bytes:
         fig.patch.set_facecolor("#fafafa")
         ax.set_facecolor("#fafafa")
 
-        # Monte Carlo scatter coloured by Sharpe
+        # Monte Carlo scatter coloured by Sharpe (feasible set background)
         mc = frontier.get("mc", [])
         if mc:
             vols    = [r[0] for r in mc]
             rets    = [r[1] for r in mc]
             sharpes = [r[2] for r in mc]
             sc = ax.scatter(vols, rets, c=sharpes, cmap="RdYlGn",
-                            s=5, alpha=0.35, vmin=-1, vmax=3, rasterized=True)
+                            s=5, alpha=0.25, vmin=-1, vmax=3, rasterized=True)
             cbar = fig.colorbar(sc, ax=ax, fraction=0.028, pad=0.02)
             cbar.set_label(L["sharpe"], fontsize=7)
             cbar.ax.tick_params(labelsize=6)
+
+        # Efficient frontier curve (the hyperbola)
+        fc = frontier.get("frontier_curve", [])
+        if len(fc) >= 2:
+            fc_vols = [p[0] for p in fc]
+            fc_rets = [p[1] for p in fc]
+            ax.plot(fc_vols, fc_rets, color="#1a1a8c", linewidth=2.0,
+                    zorder=3, label=L.get("frontier", "Efficient Frontier"))
 
         # Individual asset dots + labels
         for asset in frontier.get("assets", []):
