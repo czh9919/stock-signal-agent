@@ -118,9 +118,13 @@ def promote_to_watchlist(
 
     existing = {w["ticker"] for w in load_watchlist(str(watchlist_path))}
 
+    # Promote only on the robustly-validated signal (PSR + deflated IR +
+    # multi-window consistency + OOS), never the naive single-window t(α).
+    # This is what keeps the daily random S&P 500 draw from polluting the
+    # permanent watchlist with data-snooped false positives.
     to_add = [
         r for r in candidate_results
-        if r.get("signal") in ("BUY", "SELL")
+        if r.get("robust_signal") in ("BUY", "SELL")
         and r["ticker"] not in existing
     ]
     if not to_add:
@@ -137,7 +141,7 @@ def promote_to_watchlist(
                 "ticker":      r["ticker"],
                 "weight":      "1.0",
                 "notes":       (
-                    f"FF5 signal={r['signal']} "
+                    f"FF5 signal={r['robust_signal']} "
                     f"t={t_alpha:.1f} "
                     f"IR={r.get('ir', 0) or 0:.2f} "
                     f"[{date.today()}]"
@@ -351,10 +355,11 @@ def generate_orders(
     positions:   dict,
     equity:      float,
     price_data:  dict,
-    max_pos_pct: float = 0.15,
-    dry_run:     bool  = False,
-    risk:        dict  = None,
-    paper_cfg:   dict  = None,
+    max_pos_pct:  float = 0.15,
+    dry_run:      bool  = False,
+    risk:         dict  = None,
+    paper_cfg:    dict  = None,
+    buying_power: float = None,
 ) -> list[dict]:
     """
     Compute and (unless dry_run) execute Alpaca paper orders.
@@ -372,16 +377,23 @@ def generate_orders(
     """
     from brokers.alpaca import place_order, close_position
 
-    buy_signals  = [r for r in results if r.get("signal") == "BUY"]
-    sell_signals = [r for r in results if r.get("signal") == "SELL"]
+    # BUY requires the robust (overfitting-resistant) signal — prevents
+    # data-snooped false positives from the daily random S&P 500 draw.
+    # SELL fires on either raw OR robust signal for fast de-risking.
+    buy_signals  = [r for r in results if r.get("robust_signal") == "BUY"]
+    sell_signals = [
+        r for r in results
+        if r.get("signal") == "SELL" or r.get("robust_signal") == "SELL"
+    ]
     orders: list[dict] = []
-    closed: set[str] = set()   # tickers already queued for close (avoid dupes)
+    exiting: set = set()   # tickers already queued for close (sell signal or stop-loss)
 
     # ── Close SELL-signaled held positions (gates do NOT apply) ───────────────
     for r in sell_signals:
         ticker = r["ticker"]
-        if ticker not in positions or ticker in closed:
+        if ticker not in positions or ticker in exiting:
             continue
+        exiting.add(ticker)
         orders.append({
             "ticker": ticker, "side": "sell",
             "reason": (
@@ -389,7 +401,6 @@ def generate_orders(
                 f"  IR={r.get('ir', 0) or 0:.2f}"
             ),
         })
-        closed.add(ticker)
         if not dry_run:
             try:
                 close_position(ticker)
@@ -397,30 +408,29 @@ def generate_orders(
             except Exception as e:
                 logger.warning(f"Paper: close {ticker} failed — {e}")
 
-    # ── Position-level stop-loss (gates do NOT apply) ─────────────────────────
-    # Cut any position whose unrealised return has breached the stop, regardless
-    # of its factor signal — caps idiosyncratic downside the screen can't see.
-    stop_loss = float((paper_cfg or {}).get("stop_loss_pct", 0.15))
-    if stop_loss > 0:
+    # ── Stop-loss: close any held position past its unrealised-loss threshold ──
+    stop_loss_pct = float((paper_cfg or {}).get("stop_loss_pct", 0.0))
+    if stop_loss_pct > 0:
         for ticker, pos in positions.items():
-            if ticker in closed:
+            if ticker in exiting:
                 continue
             try:
-                plpc = float(pos.get("unrealized_plpc"))
+                plpc = float(pos.get("unrealized_plpc") or 0.0)
             except (TypeError, ValueError):
                 continue
-            if plpc <= -stop_loss:
-                orders.append({
-                    "ticker": ticker, "side": "sell",
-                    "reason": f"STOP-LOSS  P/L={plpc*100:.1f}% ≤ -{stop_loss*100:.0f}%",
-                })
-                closed.add(ticker)
-                if not dry_run:
-                    try:
-                        close_position(ticker)
-                        logger.info(f"Paper: STOP-LOSS CLOSED {ticker} ({plpc*100:.1f}%)")
-                    except Exception as e:
-                        logger.warning(f"Paper: stop-loss close {ticker} failed — {e}")
+            if plpc >= -stop_loss_pct:
+                continue
+            exiting.add(ticker)
+            orders.append({
+                "ticker": ticker, "side": "sell",
+                "reason": f"STOP-LOSS  unrealised P&L {plpc*100:.1f}% < -{stop_loss_pct*100:.0f}%",
+            })
+            if not dry_run:
+                try:
+                    close_position(ticker)
+                    logger.info(f"Paper: STOP-LOSS CLOSED {ticker} ({plpc*100:.1f}%)")
+                except Exception as e:
+                    logger.warning(f"Paper: stop-loss close {ticker} failed — {e}")
 
     # ── Risk gates — evaluated once before any new BUY ────────────────────────
     allow_buys = True
@@ -443,6 +453,11 @@ def generate_orders(
     alloc_w = np.minimum(raw_w, max_pos_pct)        # cap each at max_pos_pct
     # Do NOT renormalise: if total < 1 that's intentional (leaves cash buffer)
 
+    # Bound total spend by available buying power (cash) when supplied, so we
+    # never queue orders the account cannot fund.
+    budget      = float(buying_power) if buying_power is not None else equity
+    remaining_bp = budget
+
     for r, w in zip(new_buys, alloc_w):
         ticker = r["ticker"]
         pd_obj = price_data.get(ticker)
@@ -451,8 +466,14 @@ def generate_orders(
             continue
 
         price      = float(pd_obj.closes.iloc[-1])
-        target_val = equity * float(w)
-        qty        = max(1, int(target_val / price))
+        target_val = min(equity * float(w), remaining_bp)
+        if target_val < price:
+            logger.info(f"Paper: {ticker} BUY skipped — insufficient buying power")
+            continue
+        qty = int(target_val / price)
+        if qty < 1:
+            continue
+        remaining_bp -= qty * price
 
         orders.append({
             "ticker":    ticker,
@@ -517,7 +538,10 @@ def run_paper_trade_pipeline(config: dict) -> dict:
         logger.error("FF5 data unavailable — aborting paper trade pipeline")
         return {}
 
-    n_strategies = len(all_tickers)
+    # Multiple-testing deflation must reflect the full effective search space.
+    # We draw daily from the entire S&P 500, so floor at 500 rather than the
+    # current-day sample size — otherwise deflated IR is far too lenient.
+    n_strategies = max(len(all_tickers), 500)
 
     # 4. Screen permanent watchlist
     logger.info("Screening permanent watchlist …")
@@ -572,6 +596,7 @@ def run_paper_trade_pipeline(config: dict) -> dict:
                 all_results, positions, equity, price_data,
                 max_pos_pct=max_pos_pct, dry_run=dry_run,
                 risk=risk_snapshot, paper_cfg=paper_cfg,
+                buying_power=account_info.get("buying_power"),
             )
         except Exception as e:
             logger.error(f"Alpaca connection error: {e}")

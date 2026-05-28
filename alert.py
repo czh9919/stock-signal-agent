@@ -85,7 +85,7 @@ def check_and_alert(metrics: dict, thresholds: dict):
 
 def _get_value(metrics: dict, key: str) -> str:
     mapping = {
-        "var_95":     lambda m: f"{m.get('var_95_ewma', 0)*100:.1f}%",
+        "var_95":     lambda m: f"{m.get('var_95_cf', m.get('var_95_ewma', 0))*100:.1f}%",
         "cvar_ratio": lambda m: f"{m.get('cvar_var_ratio', 0):.2f}×",
         "max_dd":     lambda m: f"{abs(m.get('max_drawdown', 0))*100:.1f}%",
         "max_pos":    lambda m: f"{m.get('max_position_wt', 0)*100:.1f}%",

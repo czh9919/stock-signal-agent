@@ -14,8 +14,7 @@ windows:
   min_var:       21     # below this → skip holding from risk calcs
   stress:      2200     # long history (~8y) for historical crisis repricing
 
-monte_carlo:
-  paths:        10000
-  horizon_days:    30
+# Monte Carlo parameters live solely in config/settings.yaml (monte_carlo:
+# n_paths / horizon / model) — do not duplicate them here to avoid drift.
 
 risk_free_rate: 0.035   # 3.5% p.a. ECB rate (Ireland/Eurozone)

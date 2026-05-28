@@ -26,7 +26,7 @@ Full model at each step t  (vectorised over all n_paths simultaneously)
              + α · 1{|r_t| > 2σ_t}             self-excitation on extreme move
 """
 import logging
-from typing import Literal
+from typing import Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -44,6 +44,7 @@ def simulate_paths(
     n_paths: int = 5000,
     horizon: int = 21,
     model: Literal["hawkes", "garch", "gbm"] = "hawkes",
+    seed: Optional[int] = None,
 ) -> np.ndarray:
     """
     Generate correlated multivariate daily return paths.
@@ -55,6 +56,9 @@ def simulate_paths(
     n_paths : number of Monte Carlo paths
     horizon : trading-day forecast horizon
     model   : "hawkes" (default), "garch", or "gbm"
+    seed    : RNG seed. Default None → fresh OS entropy each run, so repeated
+              simulations explore independent path samples (correct MC behaviour).
+              Pass an int only for reproducible tests.
 
     Returns
     -------
@@ -68,12 +72,12 @@ def simulate_paths(
             if model == "hawkes":
                 dcc = _fit_dcc(gp)
                 hp  = _calibrate_hawkes(ret_df, gp)
-                return _hawkes_dcc_paths(mu_daily, n_paths, horizon, gp, dcc, hp)
-            return _garch_cc_paths(mu_daily, n_paths, horizon, gp)
+                return _hawkes_dcc_paths(mu_daily, n_paths, horizon, gp, dcc, hp, seed)
+            return _garch_cc_paths(mu_daily, n_paths, horizon, gp, seed)
         except Exception as e:
             logger.warning(f"{model.upper()} path gen failed ({e}) — falling back to GBM")
 
-    return _gbm_paths(ret_df, mu_daily, n_paths, horizon)
+    return _gbm_paths(ret_df, mu_daily, n_paths, horizon, seed)
 
 
 # ── GARCH fitting ─────────────────────────────────────────────────────────────
@@ -260,6 +264,7 @@ def _hawkes_dcc_paths(
     gp: dict,
     dcc: dict,
     hp: dict,
+    seed: Optional[int] = None,
 ) -> np.ndarray:
     """
     Fully vectorised simulation: GARCH(1,1) + DCC dynamic correlation + Hawkes jumps.
@@ -310,7 +315,7 @@ def _hawkes_dcc_paths(
     Q   = np.tile(dcc["Q0"], (n_paths, 1, 1)).astype(float)  # (n_paths, n, n)
     lam = np.tile(lam0,      (n_paths, 1)).astype(float)  # (n_paths, n)
 
-    rng   = np.random.default_rng(42)
+    rng   = np.random.default_rng(seed)
     paths = np.zeros((n_paths, horizon, n), dtype=float)
 
     idx_n = np.arange(n)   # used for diagonal indexing
@@ -387,6 +392,7 @@ def _garch_cc_paths(
     n_paths: int,
     horizon: int,
     gp: dict,
+    seed: Optional[int] = None,
 ) -> np.ndarray:
     """Vectorised GARCH(1,1) + constant correlation, no jumps (fallback)."""
     n     = gp["n"]
@@ -396,7 +402,7 @@ def _garch_cc_paths(
     L     = gp["L"]
 
     h   = np.tile(gp["h0"], (n_paths, 1)).astype(float)
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     paths = np.zeros((n_paths, horizon, n))
 
     for t in range(horizon):
@@ -415,11 +421,12 @@ def _gbm_paths(
     mu_daily: np.ndarray,
     n_paths: int,
     horizon: int,
+    seed: Optional[int] = None,
 ) -> np.ndarray:
     """Fully vectorised GBM with historical covariance."""
     n   = ret_df.shape[1]
     L   = _chol_psd(ret_df.cov().values)
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     z   = rng.standard_normal((n_paths, horizon, n))
     return z @ L.T + mu_daily
 

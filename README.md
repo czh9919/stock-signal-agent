@@ -292,6 +292,18 @@ The signal portfolio is shown in the email report with per-position PSR, IR, and
 
 This lets you evaluate each manual trade decision in terms of the underlying factor signal, not just the weight delta.
 
+### Factor Set: Why Five Factors, Not Six (Momentum Evaluation)
+
+The Carhart momentum factor (UMD) was formally evaluated as a sixth factor and **deliberately excluded**. The decision rests on three escalating tests, run offline against a 16-year, 116-stock S&P 500 sample (reproducible via `experiment_momentum.py` and `experiment_momentum_walkforward.py`):
+
+| Test | Question | Result | Verdict |
+|---|---|---|---|
+| Coefficient significance | Is momentum *priced* in our universe? | mean \|t(Mom)\| = 3.3; significant (\|t\|>2) for **59%** of stocks | Momentum is real |
+| Incremental explanatory power | Does adding Mom improve the regression fit? | ΔR² ≈ **0.3%** | Negligible |
+| Walk-forward economics | Does FF6-implied μ beat FF5-implied μ on out-of-sample portfolio P&L? | OOS Sharpe **1.514 vs 1.514** (45 windows), identical drawdown/turnover | No improvement |
+
+**Conclusion — significant yet redundant.** Momentum is genuinely priced, but it adds nothing the model doesn't already capture: `ff_implied_mu` estimates each stock's α over the same window, and α already absorbs momentum-driven outperformance. Adding Mom merely reshuffles return from the α term into a β·premium term, leaving total expected return — and therefore the optimiser's output — unchanged. Five factors are retained; momentum would add a download dependency and estimation noise for no economic gain. (It remains worth revisiting only as factor-attribution hygiene, never for return forecasting.)
+
 ---
 
 ## Portfolio Risk Metrics
@@ -374,21 +386,27 @@ Runs nightly at 22:00 UTC via `.github/workflows/paper_trade.yml`, 30 minutes af
    - **Rule A**: current signal is SELL → remove immediately
    - **Rule B**: current signal is not BUY AND entry is older than 30 days (date parsed from `[YYYY-MM-DD]` in notes) → remove
    - Manual entries are **never touched**
-4. **Watchlist promotion** — S&P 500 candidates with a BUY or SELL signal are appended to `watchlist.csv` (idempotent; skips existing tickers). Promoted entries have notes formatted as `FF5 signal=BUY t=X IR=Y [YYYY-MM-DD]` — this is what distinguishes them from manual entries.
+4. **Watchlist promotion** — S&P 500 candidates whose **robust signal** (PSR + deflated IR + multi-window consistency + OOS, *not* the naive t(α) signal) is BUY or SELL are appended to `watchlist.csv` (idempotent; skips existing tickers). Promoted entries have notes formatted as `FF5 signal=BUY t=X IR=Y [YYYY-MM-DD]` — this is what distinguishes them from manual entries.
 5. **Portfolio risk snapshot** — computed from current Alpaca positions:
-   - EWMA covariance (λ=0.94) → 1-day VaR_95
+   - EWMA covariance (λ=0.94) → 1-day VaR_95 via **Cornish-Fisher** (skew/kurtosis-adjusted, matching the production alert trigger; falls back to the normal quantile when < 21 days align)
    - CAPM beta vs SPY
    - HHI (position concentration)
-6. **Pre-trade risk gates** — checked before opening any new position (SELL/close orders bypass all gates):
+6. **Exit orders (bypass all risk gates)** — evaluated before any new entry:
+   - **Signal exit**: a held position whose *raw or robust* signal is SELL is closed (asymmetric on purpose — exit fast)
+   - **Stop-loss**: a held position whose Alpaca unrealised P&L falls below `−stop_loss_pct` (default −15%) is closed
+7. **Pre-trade risk gates** — checked before opening any new position (exit/close orders bypass all gates):
 
    | Gate | Default threshold |
    |---|---|
    | Max open positions | 10 |
-   | Portfolio 1-day VaR_95 | > 5% |
+   | Portfolio 1-day VaR_95 (Cornish-Fisher) | > 5% |
    | Portfolio beta vs SPY | > 1.5× |
    | Equity drawdown from `starting_equity` | > 10% |
 
-7. **IR-proportional order sizing** — each new BUY receives `equity × (IR_i / ΣIR)`, capped at `max_position_pct` (15%). Higher-conviction names (higher IR) get a larger slice. Unfilled capacity stays as cash.
+8. **Order entry & sizing** —
+   - A new BUY requires a **robust BUY** signal — the naive t(α) signal alone is not sufficient, which guards against data-snooped false positives from the daily random S&P 500 draw
+   - IR-proportional allocation: each new BUY targets `equity × (IR_i / ΣIR)`, capped at `max_position_pct` (15%); higher-conviction (higher IR) names get a larger slice
+   - Total entries are bounded by available **buying power** — orders that cannot be funded are skipped rather than truncated; unfilled capacity stays as cash
 
 ### Watchlist auto-management
 
@@ -501,10 +519,11 @@ paper_trade:
   universe_size: 50        # permanent watchlist + random S&P 500 fill
   max_position_pct: 0.15   # hard cap per position (fraction of equity)
   max_positions: 10        # halt new buys above this count
-  var_limit_pct: 0.05      # halt new buys if portfolio VaR_95 > 5%
+  var_limit_pct: 0.05      # halt new buys if portfolio Cornish-Fisher VaR_95 > 5%
   max_portfolio_beta: 1.5  # halt new buys if portfolio beta > 1.5
   max_drawdown_halt: 0.10  # halt new buys if equity down > 10% from starting_equity
   starting_equity: 100000  # Alpaca paper account starting equity (USD)
+  stop_loss_pct: 0.15      # close any position whose unrealised loss exceeds 15%
 ```
 
 ### `config/thresholds.yaml`
