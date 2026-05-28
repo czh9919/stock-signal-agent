@@ -268,18 +268,19 @@ def _paper_portfolio_risk(
     if w.sum() > 1e-9:
         w = w / w.sum()
 
-    # EWMA covariance: exponentially weighted outer-product sum
-    T   = len(ret_df)
-    lam = _EWMA_LAMBDA
-    raw_decay = lam ** np.arange(T - 1, -1, -1)   # oldest → lowest weight
-    decay     = raw_decay / raw_decay.sum()
-    R         = ret_df.values
-    mu        = (R * decay[:, None]).sum(axis=0)
-    R_dm      = R - mu
-    cov_ewma  = (R_dm * decay[:, None]).T @ R_dm
+    # EWMA covariance (shared with the main risk engine — single source of truth)
+    from risk.risk_engine import ewma_covariance, cf_var
 
+    cov_ewma  = ewma_covariance(ret_df, _EWMA_LAMBDA)
     port_var  = float(w @ cov_ewma @ w)
-    var_1d_95 = 1.645 * float(np.sqrt(max(port_var, 0.0)))
+    sigma_t   = float(np.sqrt(max(port_var, 0.0)))
+    var_1d_95_normal = 1.645 * sigma_t
+
+    # Cornish-Fisher VaR: adjusts σ for the portfolio's skew + fat tails. Used as
+    # the primary gate value so a left-skewed book is sized down correctly.
+    port_ret = (ret_df * w).sum(axis=1)
+    var_cf   = cf_var(port_ret, sigma_t, confidence=0.95)
+    var_1d_95 = var_cf if var_cf == var_cf else var_1d_95_normal  # nan-safe
 
     # HHI
     hhi = float(sum(v ** 2 for v in weights.values()))
@@ -288,7 +289,6 @@ def _paper_portfolio_risk(
     beta    = 1.0
     spy_pd  = price_data.get("SPY")
     if spy_pd is not None and spy_pd.returns is not None and not spy_pd.returns.empty:
-        port_ret = (ret_df * w).sum(axis=1)
         aligned  = pd.concat(
             {"port": port_ret, "spy": spy_pd.returns}, axis=1
         ).dropna()
@@ -298,11 +298,12 @@ def _paper_portfolio_risk(
                 beta = float(cov_mat[0, 1] / cov_mat[1, 1])
 
     return {
-        "n_positions":    len(held),
-        "var_1d_95":      var_1d_95,
-        "portfolio_beta": beta,
-        "hhi":            hhi,
-        "weights":        weights,
+        "n_positions":      len(held),
+        "var_1d_95":        var_1d_95,
+        "var_1d_95_normal": var_1d_95_normal,
+        "portfolio_beta":   beta,
+        "hhi":              hhi,
+        "weights":          weights,
     }
 
 
@@ -374,11 +375,12 @@ def generate_orders(
     buy_signals  = [r for r in results if r.get("signal") == "BUY"]
     sell_signals = [r for r in results if r.get("signal") == "SELL"]
     orders: list[dict] = []
+    closed: set[str] = set()   # tickers already queued for close (avoid dupes)
 
     # ── Close SELL-signaled held positions (gates do NOT apply) ───────────────
     for r in sell_signals:
         ticker = r["ticker"]
-        if ticker not in positions:
+        if ticker not in positions or ticker in closed:
             continue
         orders.append({
             "ticker": ticker, "side": "sell",
@@ -387,12 +389,38 @@ def generate_orders(
                 f"  IR={r.get('ir', 0) or 0:.2f}"
             ),
         })
+        closed.add(ticker)
         if not dry_run:
             try:
                 close_position(ticker)
                 logger.info(f"Paper: CLOSED {ticker}")
             except Exception as e:
                 logger.warning(f"Paper: close {ticker} failed — {e}")
+
+    # ── Position-level stop-loss (gates do NOT apply) ─────────────────────────
+    # Cut any position whose unrealised return has breached the stop, regardless
+    # of its factor signal — caps idiosyncratic downside the screen can't see.
+    stop_loss = float((paper_cfg or {}).get("stop_loss_pct", 0.15))
+    if stop_loss > 0:
+        for ticker, pos in positions.items():
+            if ticker in closed:
+                continue
+            try:
+                plpc = float(pos.get("unrealized_plpc"))
+            except (TypeError, ValueError):
+                continue
+            if plpc <= -stop_loss:
+                orders.append({
+                    "ticker": ticker, "side": "sell",
+                    "reason": f"STOP-LOSS  P/L={plpc*100:.1f}% ≤ -{stop_loss*100:.0f}%",
+                })
+                closed.add(ticker)
+                if not dry_run:
+                    try:
+                        close_position(ticker)
+                        logger.info(f"Paper: STOP-LOSS CLOSED {ticker} ({plpc*100:.1f}%)")
+                    except Exception as e:
+                        logger.warning(f"Paper: stop-loss close {ticker} failed — {e}")
 
     # ── Risk gates — evaluated once before any new BUY ────────────────────────
     allow_buys = True

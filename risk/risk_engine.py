@@ -39,6 +39,10 @@ def cf_var(portfolio_returns: pd.Series, sigma_t: float,
     We use the LOWER-tail quantile z = norm.ppf(1-confidence) < 0 so that
     negative skew pushes z_cf more negative → larger VaR (correct direction).
     pandas .kurt() returns *excess* kurtosis (Fisher definition).
+
+    Drift is intentionally set to zero: at a 1-day horizon the sample mean is
+    estimated with large error and is tiny vs σ; including it biases VaR
+    (a recent up-move would understate downside risk).
     """
     if len(portfolio_returns) < 21 or np.isnan(sigma_t):
         return float("nan")
@@ -46,8 +50,7 @@ def cf_var(portfolio_returns: pd.Series, sigma_t: float,
     skew = float(portfolio_returns.skew())
     exk  = float(portfolio_returns.kurt())   # excess kurtosis
     z_cf = cornish_fisher_z(z, skew, exk)   # more negative for left-skewed returns
-    mu   = float(portfolio_returns.mean())
-    return float(-mu - z_cf * sigma_t)      # -z_cf > 0 gives the loss magnitude
+    return float(-z_cf * sigma_t)           # -z_cf > 0 gives the loss magnitude
 
 
 # ── EVT / Peaks-over-Threshold VaR ───────────────────────────────────────────
@@ -100,16 +103,37 @@ def ewma_variance_series(returns: pd.Series, lam: float = 0.94,
     return pd.Series(var, index=returns.index)
 
 
+def ewma_covariance(ret_df: pd.DataFrame, lam: float = 0.94) -> np.ndarray:
+    """
+    EWMA covariance matrix of the columns of ret_df (most recent row weighted
+    highest). Returns an (n_assets, n_assets) numpy array aligned to ret_df.columns.
+    """
+    R = ret_df.values
+    T = R.shape[0]
+    if T == 0:
+        n = R.shape[1]
+        return np.zeros((n, n))
+    decay = lam ** np.arange(T - 1, -1, -1)   # oldest → lowest weight
+    decay = decay / decay.sum()
+    mu    = (R * decay[:, None]).sum(axis=0)
+    R_dm  = R - mu
+    return (R_dm * decay[:, None]).T @ R_dm
+
+
 def ewma_var(portfolio_returns: pd.Series, lam: float = 0.94,
              init_window: int = 21, confidence: float = 0.95) -> float:
-    """One-day VaR as a fraction of portfolio value (positive = loss)."""
+    """
+    One-day VaR as a fraction of portfolio value (positive = loss).
+
+    Drift set to zero (μ=0): see cf_var — the 1-day mean is noise-dominated and
+    biases short-horizon VaR.
+    """
     if len(portfolio_returns) < init_window:
         return float("nan")
     var_series = ewma_variance_series(portfolio_returns, lam, init_window)
     sigma_t    = float(np.sqrt(var_series.iloc[-1]))
-    mu         = float(portfolio_returns.mean())
     z          = Z95 if confidence == 0.95 else Z99
-    return -mu + z * sigma_t
+    return z * sigma_t
 
 
 # ── Fixed-window CVaR ─────────────────────────────────────────────────────────
@@ -151,8 +175,13 @@ def portfolio_returns(price_data: dict, holdings: list[dict],
     """
     Compute weighted portfolio daily returns.
     Only includes holdings with status in {ok, reduced}.
+
+    Weights are summed per ticker so the same symbol held across multiple
+    brokers is aggregated rather than silently overwritten.
     """
-    weights = {h["ticker"]: h["weight"] for h in holdings}
+    weights: dict[str, float] = {}
+    for h in holdings:
+        weights[h["ticker"]] = weights.get(h["ticker"], 0.0) + h["weight"]
     frames  = []
     for ticker, pd_obj in price_data.items():
         if pd_obj.status not in ("ok", "reduced"):
@@ -261,6 +290,180 @@ def max_drawdown(portfolio_ret: pd.Series) -> float:
     return float(dd.min())
 
 
+# ── Component / Marginal VaR ──────────────────────────────────────────────────
+
+def _aligned_returns_weights(price_data: dict, holdings: list[dict],
+                             window: int = 252):
+    """
+    Build an aligned returns DataFrame and matching weight vector for the
+    holdings whose price data is usable. Weights are summed per ticker so a
+    symbol held across brokers is aggregated. Returns (ret_df, w, tickers) or
+    (None, None, None) if fewer than 2 usable assets.
+    """
+    weights: dict[str, float] = {}
+    for h in holdings:
+        weights[h["ticker"]] = weights.get(h["ticker"], 0.0) + h["weight"]
+
+    series = {}
+    for ticker, w in weights.items():
+        pd_obj = price_data.get(ticker)
+        if (w == 0 or pd_obj is None or
+                pd_obj.status not in ("ok", "reduced") or pd_obj.returns is None):
+            continue
+        series[ticker] = pd_obj.returns.tail(window)
+
+    if len(series) < 2:
+        return None, None, None
+
+    ret_df  = pd.concat(series, axis=1).dropna()
+    if ret_df.empty:
+        return None, None, None
+    tickers = list(ret_df.columns)
+    w       = np.array([weights[t] for t in tickers], dtype=float)
+    return ret_df, w, tickers
+
+
+def component_var(price_data: dict, holdings: list[dict], lam: float = 0.94,
+                  window: int = 252, confidence: float = 0.95) -> list[dict]:
+    """
+    Decompose portfolio VaR into per-asset component contributions using the
+    EWMA covariance matrix.
+
+      marginal VaR_i = z · (Σw)_i / σ_p          (sensitivity of VaR to weight_i)
+      component VaR_i = w_i · marginal VaR_i      (Σ component VaR = portfolio VaR)
+
+    σ_p = √(wᵀΣw). Returns a list of dicts sorted by component_var descending,
+    each: {ticker, weight, marginal_var, component_var, pct_of_var}.
+    Empty list if fewer than 2 usable assets.
+    """
+    ret_df, w, tickers = _aligned_returns_weights(price_data, holdings, window)
+    if ret_df is None:
+        return []
+
+    cov   = ewma_covariance(ret_df, lam)
+    sig_p = float(np.sqrt(w @ cov @ w))
+    if sig_p <= 0 or np.isnan(sig_p):
+        return []
+
+    z          = Z95 if confidence == 0.95 else Z99
+    port_var   = z * sig_p
+    cov_w      = cov @ w
+    marginal   = z * cov_w / sig_p                 # ∂VaR/∂w_i
+    component  = w * marginal                       # sums to port_var
+
+    out = []
+    for i, t in enumerate(tickers):
+        out.append({
+            "ticker":        t,
+            "weight":        float(w[i]),
+            "marginal_var":  float(marginal[i]),
+            "component_var": float(component[i]),
+            "pct_of_var":    float(component[i] / port_var) if port_var else float("nan"),
+        })
+    out.sort(key=lambda d: d["component_var"], reverse=True)
+    return out
+
+
+# ── VaR backtesting (Kupiec POF + Christoffersen independence) ─────────────────
+
+def var_backtest(portfolio_returns: pd.Series, lam: float = 0.94,
+                 init_window: int = 21, confidence: float = 0.95,
+                 method: str = "cf") -> dict:
+    """
+    Out-of-sample VaR backtest using a causal (one-step-ahead) EWMA forecast.
+
+    For each day t we forecast σ_t from data up to t-1, build the VaR estimate,
+    and check whether the realised return breached it. We then run:
+      - Kupiec POF test    : LR_uc ~ χ²(1), H0 = exception rate equals 1-c
+      - Christoffersen ind.: LR_ind ~ χ²(1), H0 = exceptions are independent
+      - joint              : LR_cc = LR_uc + LR_ind ~ χ²(2)
+
+    method "cf" uses the Cornish-Fisher quantile (skew+kurtosis of the trailing
+    window); "normal" uses the plain Gaussian quantile.
+    Returns a dict of counts, rates, LR stats and p-values (all JSON-safe).
+    """
+    from scipy.stats import chi2
+
+    n = len(portfolio_returns)
+    if n < init_window + 60:
+        return {"status": "insufficient_data", "n_obs": int(n)}
+
+    var_series = ewma_variance_series(portfolio_returns, lam, init_window)
+    sigma      = np.sqrt(var_series.values)
+    r          = portfolio_returns.values
+    p          = 1 - confidence
+    z          = norm.ppf(p)                       # negative
+
+    start = init_window
+    exceptions = []                                # 1 if breach, else 0
+    for t in range(start, n):
+        s_t = sigma[t - 1]                         # causal: forecast from t-1
+        if np.isnan(s_t) or s_t <= 0:
+            continue
+        if method == "cf":
+            win   = portfolio_returns.iloc[max(0, t - 252):t]
+            skew  = float(win.skew()) if len(win) > 3 else 0.0
+            exk   = float(win.kurt()) if len(win) > 3 else 0.0
+            z_use = cornish_fisher_z(z, skew, exk)
+        else:
+            z_use = z
+        var_t = z_use * s_t                        # negative threshold
+        exceptions.append(1 if r[t] < var_t else 0)
+
+    exc = np.array(exceptions, dtype=int)
+    N   = len(exc)
+    if N == 0:
+        return {"status": "insufficient_data", "n_obs": int(n)}
+    x   = int(exc.sum())
+    rate = x / N
+
+    # Kupiec POF: LR_uc = -2 ln[ (1-p)^(N-x) p^x / (1-rate)^(N-x) rate^x ]
+    def _safe_ln(a):
+        return np.log(a) if a > 0 else 0.0
+
+    ll_null = (N - x) * _safe_ln(1 - p) + x * _safe_ln(p)
+    ll_alt  = (N - x) * _safe_ln(1 - rate) + x * _safe_ln(rate)
+    lr_uc   = -2.0 * (ll_null - ll_alt)
+    p_uc    = float(chi2.sf(lr_uc, 1))
+
+    # Christoffersen independence via transition counts
+    n00 = n01 = n10 = n11 = 0
+    for a, b in zip(exc[:-1], exc[1:]):
+        if a == 0 and b == 0: n00 += 1
+        elif a == 0 and b == 1: n01 += 1
+        elif a == 1 and b == 0: n10 += 1
+        else: n11 += 1
+    pi01 = n01 / (n00 + n01) if (n00 + n01) else 0.0
+    pi11 = n11 / (n10 + n11) if (n10 + n11) else 0.0
+    pi   = (n01 + n11) / (n00 + n01 + n10 + n11) if (n00 + n01 + n10 + n11) else 0.0
+    ll_ind  = (n00 + n10) * _safe_ln(1 - pi) + (n01 + n11) * _safe_ln(pi)
+    ll_dep  = (n00 * _safe_ln(1 - pi01) + n01 * _safe_ln(pi01) +
+               n10 * _safe_ln(1 - pi11) + n11 * _safe_ln(pi11))
+    lr_ind  = -2.0 * (ll_ind - ll_dep)
+    p_ind   = float(chi2.sf(lr_ind, 1))
+
+    lr_cc = lr_uc + lr_ind
+    p_cc  = float(chi2.sf(lr_cc, 2))
+
+    return {
+        "status":          "ok",
+        "method":          method,
+        "confidence":      float(confidence),
+        "n_obs":           int(N),
+        "exceptions":      int(x),
+        "expected":        float(N * p),
+        "exception_rate":  float(rate),
+        "expected_rate":   float(p),
+        "kupiec_lr":       float(lr_uc),
+        "kupiec_p":        p_uc,
+        "christ_lr":       float(lr_ind),
+        "christ_p":        p_ind,
+        "cc_lr":           float(lr_cc),
+        "cc_p":            p_cc,
+        "pass":            bool(p_uc > 0.05 and p_ind > 0.05),
+    }
+
+
 # ── Full metrics bundle ───────────────────────────────────────────────────────
 
 def compute_all(holdings: list[dict], price_data: dict,
@@ -274,7 +477,7 @@ def compute_all(holdings: list[dict], price_data: dict,
     lam        = vcfg.get("ewma", {}).get("lambda", 0.94)
     init_win   = vcfg.get("ewma", {}).get("init_window", 21)
     fixed_win  = vcfg.get("windows", {}).get("fixed", 252)
-    rf         = vcfg.get("risk_free_rate", 0.045)
+    rf         = vcfg.get("risk_free_rate", 0.035)
 
     port_ret   = portfolio_returns(price_data, holdings, window=fixed_win)
     nav        = sum(h["market_value_eur"] for h in holdings)
@@ -312,6 +515,14 @@ def compute_all(holdings: list[dict], price_data: dict,
         "hhi":               hhi(holdings),
         "max_position_wt":   max((h["weight"] for h in holdings), default=0.0),
         "port_sigma_annual": portfolio_sigma(price_data, holdings, vcfg.get("garch", {})),
+        "component_var":     component_var(price_data, holdings, lam=lam,
+                                           window=fixed_win, confidence=0.95),
+        "var_backtest":      {
+            "cf":     var_backtest(port_ret, lam=lam, init_window=init_win,
+                                   confidence=0.95, method="cf"),
+            "normal": var_backtest(port_ret, lam=lam, init_window=init_win,
+                                   confidence=0.95, method="normal"),
+        },
     }
 
     # RAG status

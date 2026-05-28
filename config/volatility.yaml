@@ -12,6 +12,7 @@ windows:
   correlation:   63     # rolling Pearson (≈ 1 quarter)
   monte_carlo:   63     # EWMA covariance for MC paths
   min_var:       21     # below this → skip holding from risk calcs
+  stress:      2200     # long history (~8y) for historical crisis repricing
 
 monte_carlo:
   paths:        10000

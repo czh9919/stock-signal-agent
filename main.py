@@ -88,7 +88,10 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None, on_log=N
             return
 
     equity_tickers = list({h["ticker"] for h in holdings if h.get("asset_class", "equity") == "equity"})
-    price_data     = load_prices(equity_tickers + ["SPY"], days=fixed_days)
+    # Load ALL holding tickers (incl. bonds/gold) so 1-day risk metrics, the
+    # optimizer and stress price the whole portfolio — not just the equity sleeve.
+    all_tickers    = list({h["ticker"] for h in holdings})
+    price_data     = load_prices(all_tickers + ["SPY"], days=fixed_days)
     spy_pd         = price_data.pop("SPY", None)
 
     from risk.risk_engine import compute_all
@@ -213,7 +216,12 @@ def run_portfolio_pipeline(run_mode: str = "full", config: dict = None, on_log=N
     from notify.chart       import risk_return_png
     from notify             import mailer
 
-    stress      = run_stress(holdings, price_data, metrics["nav_eur"], vol_cfg=vol_cfg)
+    # Stress tests need multi-year history to reprice through past crises; the
+    # 252-day risk window never reaches 2008/2020/2022. Load a long window once.
+    stress_days = vol_cfg.get("windows", {}).get("stress", 2200)
+    stress_pd   = load_prices(all_tickers, days=stress_days)
+    stress      = run_stress(holdings, stress_pd, metrics["nav_eur"], vol_cfg=vol_cfg,
+                             port_beta=metrics.get("beta", 1.0))
     snapshot    = {"holdings": holdings, "metrics": {k: v for k, v in metrics.items() if k != "alerts"}}
     cache.save_snapshot(snapshot)
     last_week   = cache.load_week_ago_snapshot()

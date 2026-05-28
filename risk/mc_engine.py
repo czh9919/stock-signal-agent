@@ -315,6 +315,26 @@ def _hawkes_dcc_paths(
 
     idx_n = np.arange(n)   # used for diagonal indexing
 
+    # ── Filtered Historical Simulation innovations ────────────────────────────
+    # Bootstrap standardised GARCH residuals (per asset, column-independent)
+    # instead of drawing Gaussian noise. This preserves each asset's empirical
+    # skew/fat tails; the DCC L_t below re-imposes cross-asset correlation.
+    # Falls back to Gaussian if the residual history is too short.
+    SR_raw = gp.get("std_resids")
+    use_fhs = SR_raw is not None and SR_raw.shape[0] >= 50 and SR_raw.shape[1] == n
+    if use_fhs:
+        SR_z = SR_raw - SR_raw.mean(axis=0)
+        sd   = SR_z.std(axis=0)
+        sd[sd == 0] = 1.0
+        SR_z = SR_z / sd                                   # unit-variance columns
+        T_sr = SR_z.shape[0]
+
+    def _draw_innovations() -> np.ndarray:
+        if use_fhs:
+            idx = rng.integers(0, T_sr, size=(n_paths, n))
+            return SR_z[idx, idx_n]                         # (n_paths, n)
+        return rng.standard_normal((n_paths, n))
+
     for t in range(horizon):
         # ── DCC: correlation matrix R_t from Q ───────────────────────────────
         Q_diag  = Q[:, idx_n, idx_n]                        # (n_paths, n)
@@ -329,8 +349,8 @@ def _hawkes_dcc_paths(
             R_t += np.eye(n) * 1e-4
             L_t  = np.linalg.cholesky(R_t)
 
-        # ── Correlated GARCH innovations ──────────────────────────────────────
-        z   = rng.standard_normal((n_paths, n))             # (n_paths, n)
+        # ── Correlated GARCH innovations (FHS bootstrap or Gaussian) ──────────
+        z   = _draw_innovations()                           # (n_paths, n)
         z_c = np.einsum("pij,pj->pi", L_t, z)              # (n_paths, n)
 
         sigma  = np.sqrt(h)                                  # pct, (n_paths, n)
